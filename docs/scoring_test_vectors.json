@@ -1,0 +1,317 @@
+{
+  "version": 1,
+  "description": "Shared executable examples for docs/SCORING_RULES.md. Used by backend/tests and frontend/test. Every delivery listed is a PARTIAL delivery: fields not given default to the values in delivery_defaults. 'dismissed' is a harness-only field: STRIKER (default) or NON_STRIKER, resolved to dismissed_player_id by the test harness.",
+  "delivery_defaults": {
+    "runs_bat": 0,
+    "runs_extras": 0,
+    "is_wide": false,
+    "is_no_ball": false,
+    "is_bye": false,
+    "is_leg_bye": false,
+    "is_wicket": false,
+    "dismissal_type": null,
+    "dismissed": "STRIKER"
+  },
+  "step_ops": {
+    "add": "Apply a new delivery. If 'expect_error' is present the delivery must be rejected with that code and must NOT appear in expected.deliveries.",
+    "void_last": "Void the last non-voided delivery. Error NOTHING_TO_VOID if there is none.",
+    "void_index": "Try to void the delivery at the given zero-based index in add-order (including rejected adds being skipped). Used to assert NOT_LAST_DELIVERY."
+  },
+  "valid_sequences": [
+    {
+      "name": "six_dot_balls_then_next_over",
+      "overs_per_innings": 2,
+      "steps": [
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}}
+      ],
+      "expected": {
+        "total_runs": 0, "wickets": 0, "legal_balls": 7,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": 3},
+          {"delivery_sequence": 4, "over_number": 0, "legal_ball_number": 4},
+          {"delivery_sequence": 5, "over_number": 0, "legal_ball_number": 5},
+          {"delivery_sequence": 6, "over_number": 0, "legal_ball_number": 6},
+          {"delivery_sequence": 7, "over_number": 1, "legal_ball_number": 1}
+        ]
+      }
+    },
+    {
+      "name": "runs_off_the_bat",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"runs_bat": 1}},
+        {"op": "add", "delivery": {"runs_bat": 4}},
+        {"op": "add", "delivery": {"runs_bat": 6}},
+        {"op": "add", "delivery": {"runs_bat": 0}},
+        {"op": "add", "delivery": {"runs_bat": 2}},
+        {"op": "add", "delivery": {"runs_bat": 3}}
+      ],
+      "expected": {
+        "total_runs": 16, "wickets": 0, "legal_balls": 6,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": 3},
+          {"delivery_sequence": 4, "over_number": 0, "legal_ball_number": 4},
+          {"delivery_sequence": 5, "over_number": 0, "legal_ball_number": 5},
+          {"delivery_sequence": 6, "over_number": 0, "legal_ball_number": 6}
+        ]
+      }
+    },
+    {
+      "name": "wides_do_not_consume_balls",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"is_wide": true, "runs_extras": 1}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {"is_wide": true, "runs_extras": 5}},
+        {"op": "add", "delivery": {"runs_bat": 1}}
+      ],
+      "expected": {
+        "total_runs": 7, "wickets": 0, "legal_balls": 2,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": null},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 1},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": null},
+          {"delivery_sequence": 4, "over_number": 0, "legal_ball_number": 2}
+        ]
+      }
+    },
+    {
+      "name": "no_ball_with_bat_runs",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"is_no_ball": true, "runs_extras": 1, "runs_bat": 4}},
+        {"op": "add", "delivery": {}}
+      ],
+      "expected": {
+        "total_runs": 5, "wickets": 0, "legal_balls": 1,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": null},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 1}
+        ]
+      }
+    },
+    {
+      "name": "byes_and_leg_byes_are_legal_balls",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"is_bye": true, "runs_extras": 2}},
+        {"op": "add", "delivery": {"is_leg_bye": true, "runs_extras": 1}},
+        {"op": "add", "delivery": {"is_no_ball": true, "is_bye": true, "runs_extras": 3}}
+      ],
+      "expected": {
+        "total_runs": 6, "wickets": 0, "legal_balls": 2,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": null}
+        ]
+      }
+    },
+    {
+      "name": "wickets_of_every_allowed_shape",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"is_wicket": true, "dismissal_type": "BOWLED"}},
+        {"op": "add", "delivery": {"is_no_ball": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "RUN_OUT", "dismissed": "NON_STRIKER"}},
+        {"op": "add", "delivery": {"is_wide": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "STUMPED"}},
+        {"op": "add", "delivery": {"runs_bat": 1, "is_wicket": true, "dismissal_type": "RUN_OUT", "dismissed": "NON_STRIKER"}}
+      ],
+      "expected": {
+        "total_runs": 3, "wickets": 4, "legal_balls": 2,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": null},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": null},
+          {"delivery_sequence": 4, "over_number": 0, "legal_ball_number": 2}
+        ]
+      }
+    },
+    {
+      "name": "void_last_reuses_ball_position_but_not_sequence",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"runs_bat": 4}},
+        {"op": "add", "delivery": {"runs_bat": 6}},
+        {"op": "void_last"},
+        {"op": "add", "delivery": {"runs_bat": 1}}
+      ],
+      "expected": {
+        "total_runs": 5, "wickets": 0, "legal_balls": 2,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1, "voided": false},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2, "voided": true},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": 2, "voided": false}
+        ]
+      }
+    },
+    {
+      "name": "void_a_wide",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"is_wide": true, "runs_extras": 1}},
+        {"op": "void_last"},
+        {"op": "add", "delivery": {}}
+      ],
+      "expected": {
+        "total_runs": 0, "wickets": 0, "legal_balls": 1,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": null, "voided": true},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 1, "voided": false}
+        ]
+      }
+    },
+    {
+      "name": "void_a_wicket",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {"is_wicket": true, "dismissal_type": "BOWLED"}},
+        {"op": "void_last"},
+        {"op": "add", "delivery": {}}
+      ],
+      "expected": {
+        "total_runs": 0, "wickets": 0, "legal_balls": 1,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1, "voided": true},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 1, "voided": false}
+        ]
+      }
+    },
+    {
+      "name": "innings_complete_rejects_every_delivery_type",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}, "expect_error": "OVER_LIMIT_EXCEEDED"},
+        {"op": "add", "delivery": {"is_wide": true, "runs_extras": 1}, "expect_error": "OVER_LIMIT_EXCEEDED"}
+      ],
+      "expected": {
+        "total_runs": 0, "wickets": 0, "legal_balls": 6,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": 3},
+          {"delivery_sequence": 4, "over_number": 0, "legal_ball_number": 4},
+          {"delivery_sequence": 5, "over_number": 0, "legal_ball_number": 5},
+          {"delivery_sequence": 6, "over_number": 0, "legal_ball_number": 6}
+        ]
+      }
+    },
+    {
+      "name": "void_across_over_boundary",
+      "overs_per_innings": 2,
+      "steps": [
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "void_last"},
+        {"op": "add", "delivery": {"runs_bat": 2}}
+      ],
+      "expected": {
+        "total_runs": 2, "wickets": 0, "legal_balls": 7,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1, "voided": false},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2, "voided": false},
+          {"delivery_sequence": 3, "over_number": 0, "legal_ball_number": 3, "voided": false},
+          {"delivery_sequence": 4, "over_number": 0, "legal_ball_number": 4, "voided": false},
+          {"delivery_sequence": 5, "over_number": 0, "legal_ball_number": 5, "voided": false},
+          {"delivery_sequence": 6, "over_number": 0, "legal_ball_number": 6, "voided": false},
+          {"delivery_sequence": 7, "over_number": 1, "legal_ball_number": 1, "voided": true},
+          {"delivery_sequence": 8, "over_number": 1, "legal_ball_number": 1, "voided": false}
+        ]
+      }
+    },
+    {
+      "name": "only_the_last_delivery_can_be_voided",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "add", "delivery": {}},
+        {"op": "add", "delivery": {}},
+        {"op": "void_index", "index": 0, "expect_error": "NOT_LAST_DELIVERY"}
+      ],
+      "expected": {
+        "total_runs": 0, "wickets": 0, "legal_balls": 2,
+        "deliveries": [
+          {"delivery_sequence": 1, "over_number": 0, "legal_ball_number": 1, "voided": false},
+          {"delivery_sequence": 2, "over_number": 0, "legal_ball_number": 2, "voided": false}
+        ]
+      }
+    },
+    {
+      "name": "void_with_nothing_to_void",
+      "overs_per_innings": 1,
+      "steps": [
+        {"op": "void_last", "expect_error": "NOTHING_TO_VOID"}
+      ],
+      "expected": {
+        "total_runs": 0, "wickets": 0, "legal_balls": 0,
+        "deliveries": []
+      }
+    }
+  ],
+  "valid_deliveries": [
+    {"name": "legal_dot", "delivery": {}},
+    {"name": "legal_six", "delivery": {"runs_bat": 6}},
+    {"name": "overthrow_seven", "delivery": {"runs_bat": 7}},
+    {"name": "wide_boundary", "delivery": {"is_wide": true, "runs_extras": 5}},
+    {"name": "wide_max_extras", "delivery": {"is_wide": true, "runs_extras": 10}},
+    {"name": "no_ball_six", "delivery": {"is_no_ball": true, "runs_extras": 1, "runs_bat": 6}},
+    {"name": "no_ball_with_leg_byes", "delivery": {"is_no_ball": true, "is_leg_bye": true, "runs_extras": 2}},
+    {"name": "bye_four", "delivery": {"is_bye": true, "runs_extras": 4}},
+    {"name": "legal_lbw", "delivery": {"is_wicket": true, "dismissal_type": "LBW"}},
+    {"name": "legal_caught_with_runs_run", "delivery": {"runs_bat": 1, "is_wicket": true, "dismissal_type": "CAUGHT"}},
+    {"name": "legal_hit_wicket", "delivery": {"is_wicket": true, "dismissal_type": "HIT_WICKET"}},
+    {"name": "legal_stumped", "delivery": {"is_wicket": true, "dismissal_type": "STUMPED"}},
+    {"name": "legal_run_out_non_striker", "delivery": {"is_wicket": true, "dismissal_type": "RUN_OUT", "dismissed": "NON_STRIKER"}},
+    {"name": "wide_hit_wicket", "delivery": {"is_wide": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "HIT_WICKET"}},
+    {"name": "wide_run_out", "delivery": {"is_wide": true, "runs_extras": 2, "is_wicket": true, "dismissal_type": "RUN_OUT"}},
+    {"name": "no_ball_run_out", "delivery": {"is_no_ball": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "RUN_OUT"}}
+  ],
+  "invalid_deliveries": [
+    {"name": "wide_with_bat_runs", "delivery": {"is_wide": true, "runs_extras": 1, "runs_bat": 1}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "wide_without_extras", "delivery": {"is_wide": true, "runs_extras": 0}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "no_ball_without_extras", "delivery": {"is_no_ball": true, "runs_extras": 0}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "wide_and_no_ball", "delivery": {"is_wide": true, "is_no_ball": true, "runs_extras": 1}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "bye_with_bat_runs", "delivery": {"is_bye": true, "runs_extras": 1, "runs_bat": 1}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "leg_bye_with_bat_runs", "delivery": {"is_leg_bye": true, "runs_extras": 1, "runs_bat": 2}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "bye_without_extras", "delivery": {"is_bye": true, "runs_extras": 0}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "bye_and_leg_bye", "delivery": {"is_bye": true, "is_leg_bye": true, "runs_extras": 1}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "wide_with_bye", "delivery": {"is_wide": true, "is_bye": true, "runs_extras": 2}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "wide_with_leg_bye", "delivery": {"is_wide": true, "is_leg_bye": true, "runs_extras": 2}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "extras_without_flags", "delivery": {"runs_extras": 2}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "no_ball_bye_needs_a_bye_run", "delivery": {"is_no_ball": true, "is_bye": true, "runs_extras": 1}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "wicket_without_dismissal_type", "delivery": {"is_wicket": true}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "dismissal_type_without_wicket", "delivery": {"dismissal_type": "BOWLED"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "caught_on_no_ball", "delivery": {"is_no_ball": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "CAUGHT"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "bowled_on_no_ball", "delivery": {"is_no_ball": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "BOWLED"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "stumped_on_no_ball", "delivery": {"is_no_ball": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "STUMPED"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "hit_wicket_on_no_ball", "delivery": {"is_no_ball": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "HIT_WICKET"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "bowled_on_wide", "delivery": {"is_wide": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "BOWLED"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "caught_on_wide", "delivery": {"is_wide": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "CAUGHT"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "lbw_on_wide", "delivery": {"is_wide": true, "runs_extras": 1, "is_wicket": true, "dismissal_type": "LBW"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "non_striker_bowled", "delivery": {"is_wicket": true, "dismissal_type": "BOWLED", "dismissed": "NON_STRIKER"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "non_striker_stumped", "delivery": {"is_wicket": true, "dismissal_type": "STUMPED", "dismissed": "NON_STRIKER"}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "runs_bat_too_high", "delivery": {"runs_bat": 8}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "runs_extras_too_high", "delivery": {"is_wide": true, "runs_extras": 11}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "negative_bat_runs", "delivery": {"runs_bat": -1}, "expect_error": "INVALID_DELIVERY"},
+    {"name": "negative_extras", "delivery": {"is_wide": true, "runs_extras": -1}, "expect_error": "INVALID_DELIVERY"}
+  ]
+}
