@@ -14,7 +14,13 @@ double calculateSpeedKmph(double distanceMeters, int startTimestampMs, int endTi
 /// An estimated ball speed. Always an estimate: the UI should show
 /// `Estimated 68 km/h`.
 final class SpeedEstimate extends Equatable {
-  const SpeedEstimate({required this.kmph, required this.confidence, this.uncertaintyKmph});
+  const SpeedEstimate({
+    required this.kmph,
+    required this.confidence,
+    this.uncertaintyKmph,
+    this.releaseKmph,
+    this.creaseKmph,
+  });
 
   final double kmph;
 
@@ -25,8 +31,14 @@ final class SpeedEstimate extends Equatable {
   /// estimate that has no way of measuring its own error.
   final double? uncertaintyKmph;
 
+  /// Velocity at release from bowler's hand (accounting for aerodynamic drag).
+  final double? releaseKmph;
+
+  /// Velocity as ball arrives at batsman plane (after drag & pitch bounce).
+  final double? creaseKmph;
+
   @override
-  List<Object?> get props => <Object?>[kmph, confidence, uncertaintyKmph];
+  List<Object?> get props => <Object?>[kmph, confidence, uncertaintyKmph, releaseKmph, creaseKmph];
 
   @override
   String toString() {

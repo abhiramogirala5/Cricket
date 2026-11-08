@@ -1,9 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:gully_umpire/cv/geometry/point2d.dart';
 import 'package:gully_umpire/cv/live/frame_source.dart';
 import 'package:gully_umpire/cv/live/live_analysis.dart';
 import 'package:gully_umpire/cv/live/live_session.dart';
+import 'package:gully_umpire/cv/scene/optical_wicket_tracker.dart';
+import 'package:gully_umpire/domain/decisions/wicket_family.dart';
+import 'package:gully_umpire/features/live_camera/camera_distance.dart';
 
 /// Opens the camera. Throws a [FrameSourceException] with a message for the person when it cannot.
 typedef FrameSourceOpener = Future<FrameSource> Function();
@@ -98,6 +102,47 @@ final class UmpireCameraController extends ChangeNotifier {
 
   /// One result per delivery that was followed.
   Stream<LiveDeliveryResult> get results => _results.stream;
+
+  /// Runs optical computer vision to detect the true physical boundaries of stumps / chairs.
+  OpticalWicketResult detectOrRefineWicket({
+    Point2D? searchCenter,
+    WicketFamily family = WicketFamily.traditionalStumps,
+    double? targetDistanceFeet,
+    double zoom = 1.0,
+  }) {
+    final LiveSessionPort? session = _session;
+    if (session == null) {
+      return OpticalWicketResult(
+        corners: smartWicketCorners(
+          family: family,
+          centerX: searchCenter?.x ?? 0.50,
+          groundY: searchCenter?.y ?? 0.65,
+          targetDistanceFeet: targetDistanceFeet,
+          zoom: zoom,
+        ),
+        confidence: 0.50,
+        isOpticallyRefined: false,
+        family: family,
+        statusMessage: 'Aligned with pitch corridor (${family.label})',
+      );
+    }
+    return session.detectOrRefineWicket(
+      searchCenter: searchCenter,
+      family: family,
+      targetDistanceFeet: targetDistanceFeet,
+      zoom: zoom,
+    );
+  }
+
+  /// Locks spatial anchor tracking so that camera motion keeps the polygon fixed on the physical object.
+  void lockSpatialAnchor(List<Point2D> corners) {
+    _session?.lockSpatialAnchor(corners);
+  }
+
+  /// Unlocks spatial anchor tracking (e.g. while the user is actively dragging corner handles).
+  void unlockSpatialAnchor() {
+    _session?.unlockSpatialAnchor();
+  }
 
   /// Opens the camera and the tracker. Does nothing when they are already open or opening.
   Future<void> start() async {

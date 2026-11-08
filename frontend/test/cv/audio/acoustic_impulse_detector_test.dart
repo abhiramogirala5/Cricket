@@ -40,7 +40,7 @@ void main() {
     test('detects a sharp high-frequency transient click (bat edge signature)', () async {
       // 500ms of ambient noise, followed by an impulse click at 2500Hz, then quiet
       final Int16List audio = Int16List(44100 ~/ 2); // 500ms
-      final int clickStart = 44100 ~/ 4; // At 250ms
+      const int clickStart = 44100 ~/ 4; // At 250ms
 
       // Generate click with ~2500Hz resonance lasting ~10ms (441 samples)
       for (int i = 0; i < 441; i++) {

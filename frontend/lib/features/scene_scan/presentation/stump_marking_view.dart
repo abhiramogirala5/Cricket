@@ -20,6 +20,7 @@ import 'package:gully_umpire/cv/live/manual_wicket.dart';
 import 'package:gully_umpire/cv/live/umpire_camera_controller.dart';
 import 'package:gully_umpire/cv/live/zoom_advice.dart';
 import 'package:gully_umpire/cv/pipelines/pipelines.dart';
+import 'package:gully_umpire/cv/scene/optical_wicket_tracker.dart';
 import 'package:gully_umpire/data/settings/live_settings.dart';
 import 'package:gully_umpire/domain/aggregates/match_bundle.dart';
 import 'package:gully_umpire/domain/decisions/wicket_family.dart';
@@ -176,23 +177,54 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
   }
 
   void _autoDetectWicket() {
-    final List<Point2D> autoCorners = autoDetectWicketCorners(
-      candidates: _controller.status.candidates,
+    final LiveSessionStatus status = _controller.status;
+    final bool hasPose = status.poseSeen && status.batterGroundPoint != null;
+    final double currentDist = _distance.isValid ? _distance.feet! : 66.0;
+
+    final Point2D searchCenter = status.batterGroundPoint ?? const Point2D(0.50, 0.65);
+    final OpticalWicketResult optical = _controller.detectOrRefineWicket(
+      searchCenter: searchCenter,
       family: _family,
-      targetDistanceFeet: _distance.isValid ? _distance.feet : 66.0,
+      targetDistanceFeet: currentDist,
       zoom: _controller.zoom,
     );
+
+    final List<Point2D> finalCorners;
+    if (optical.isOpticallyRefined) {
+      finalCorners = optical.corners;
+    } else if (hasPose) {
+      finalCorners = autoDetectWicketCorners(
+        batterGroundPoint: status.batterGroundPoint,
+        batterHeightNorm: status.batterHeightNorm,
+        candidates: status.candidates,
+        family: _family,
+        targetDistanceFeet: currentDist,
+        zoom: _controller.zoom,
+      );
+    } else {
+      finalCorners = optical.corners;
+    }
+
     setState(() {
-      _corners = autoCorners;
+      _corners = finalCorners;
       _userEditedDistance = false;
     });
+
+    _controller.lockSpatialAnchor(finalCorners);
     _autoUpdateDistance();
     _sendInputs();
+
     if (mounted) {
+      final String msg = optical.isOpticallyRefined
+          ? '🔒 Physical stumps detected (${_family.label})! Spatial motion tracking active.'
+          : (hasPose
+              ? '🔒 Wicket snapped to batter crease (${_family.label})! Spatial motion tracking active.'
+              : '🔒 Wicket locked for ${_family.label}. Spatial motion tracking active.');
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Wicket auto-detected and locked for ${_family.label}'),
-          duration: const Duration(seconds: 2),
+          content: Text(msg),
+          duration: const Duration(seconds: 3),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -239,6 +271,7 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
   }
 
   void _dragStart(DragStartDetails details, Size size) {
+    _controller.unlockSpatialAnchor();
     final Point2D at = _normalised(details.localPosition, size);
     final int? corner = nearestCorner(_corners, at, maxDistance: 0.16);
     setState(() {
@@ -271,7 +304,47 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
       _activeCorner = null;
       _draggingShape = false;
     });
+    _controller.lockSpatialAnchor(_corners);
     _autoUpdateDistance();
+  }
+
+  void _onTapToPlace(TapUpDetails details, Size size) {
+    final Point2D at = _normalised(details.localPosition, size);
+    if (nearestCorner(_corners, at, maxDistance: 0.08) != null) {
+      return;
+    }
+    final double currentDist = _distance.isValid ? _distance.feet! : 66.0;
+
+    // Optical computer vision: detect physical vertical edges & boundaries of stumps/chair!
+    final OpticalWicketResult optical = _controller.detectOrRefineWicket(
+      searchCenter: at,
+      family: _family,
+      targetDistanceFeet: currentDist,
+      zoom: _controller.zoom,
+    );
+
+    setState(() {
+      _corners = optical.corners;
+      _userEditedDistance = false;
+    });
+
+    _controller.lockSpatialAnchor(optical.corners);
+    _autoUpdateDistance();
+    _sendInputs();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      final String msg = optical.isOpticallyRefined
+          ? '🔒 Optical Lock: Physical stumps detected! Spatial motion tracking active.'
+          : '🔒 Locked onto ${_family.label}! Spatial motion tracking active.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg),
+          duration: const Duration(seconds: 3),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   // ---- Actions -----------------------------------------------------------------------------
@@ -358,6 +431,12 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
     final String? problem = wicketCornersProblem(_corners);
     final bool running = _controller.isRunning;
     final LiveSessionStatus status = _controller.status;
+    if (status.isSpatialAnchorLocked &&
+        status.lockedWicketCorners != null &&
+        !_draggingShape &&
+        _activeCorner == null) {
+      _corners = status.lockedWicketCorners!;
+    }
     final VoidCallback? skip = widget.onSkip;
     return Align(
       alignment: Alignment.topCenter,
@@ -377,10 +456,9 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              'Stand behind the bowler’s end and point the phone at the batter. Fit the whole '
-              'batter and the stumps in the picture, set the zoom, then drag the four amber '
-              'corners onto the stumps (or whatever you use as the wicket). Do not move the '
-              'phone after this.',
+              'Stand behind the bowler’s end and point the phone at the batter. '
+              'Tap directly on your stumps or chair to lock the box, or drag the amber corners. '
+              'Use zoom (1.5x / 2x) for distant pitches.',
               style: text.bodyMedium?.copyWith(color: AppColors.inkMuted),
             ),
             const SizedBox(height: AppSpacing.lg),
@@ -560,22 +638,62 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
           CameraPreviewBox(
             source: _controller.source,
             maxHeight: 420,
+            currentZoom: _controller.zoom,
+            onZoomSelected: (double z) async {
+              await _controller.setZoom(z);
+              setState(() {});
+              _autoUpdateDistance();
+            },
             overlay: LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
                 final Size size = constraints.biggest;
-                return GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onPanStart: (DragStartDetails details) => _dragStart(details, size),
-                  onPanUpdate: (DragUpdateDetails details) => _dragUpdate(details, size),
-                  onPanEnd: (_) => _dragEnd(),
-                  onPanCancel: _dragEnd,
-                  child: CustomPaint(
-                    size: size,
-                    painter: LiveOverlayPainter(
-                      corners: _corners,
-                      activeCorner: _activeCorner,
+                return Stack(
+                  children: <Widget>[
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTapUp: (TapUpDetails details) => _onTapToPlace(details, size),
+                      onPanStart: (DragStartDetails details) => _dragStart(details, size),
+                      onPanUpdate: (DragUpdateDetails details) => _dragUpdate(details, size),
+                      onPanEnd: (_) => _dragEnd(),
+                      onPanCancel: _dragEnd,
+                      child: CustomPaint(
+                        size: size,
+                        painter: LiveOverlayPainter(
+                          corners: _corners,
+                          activeCorner: _activeCorner,
+                        ),
+                      ),
                     ),
-                  ),
+                    if (status.isSpatialAnchorLocked)
+                      Positioned(
+                        top: 10,
+                        left: 10,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.72),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.greenAccent, width: 1.2),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Icon(Icons.lock, size: 12, color: Colors.greenAccent),
+                              SizedBox(width: 4),
+                              Text(
+                                'SPATIAL LOCK: TRACKING CAMERA MOTION',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
                 );
               },
             ),

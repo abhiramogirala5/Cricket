@@ -304,6 +304,12 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
         const SizedBox(height: AppSpacing.sm),
         CameraPreviewBox(
           source: _controller.source,
+          currentZoom: _controller.zoom,
+          onZoomSelected: (double z) async {
+            await _controller.setZoom(z);
+            final LiveSettings? settings = ref.read(liveSettingsProvider);
+            await settings?.setZoomFor(widget.matchId, z);
+          },
           overlay: IgnorePointer(
             child: CustomPaint(
               painter: LiveOverlayPainter(

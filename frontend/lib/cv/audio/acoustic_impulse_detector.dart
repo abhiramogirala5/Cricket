@@ -91,7 +91,6 @@ final class AcousticImpulseDetector implements AudioAnalyzer {
       double sumSquares = 0.0;
       double peak = 0.0;
       int zeroCrossings = 0;
-      double highFreqDiffSum = 0.0;
 
       double prev = samples[offset] / 32768.0;
       for (int i = 0; i < win; i++) {
@@ -106,8 +105,6 @@ final class AcousticImpulseDetector implements AudioAnalyzer {
         if ((s >= 0 && prev < 0) || (s < 0 && prev >= 0)) {
           zeroCrossings++;
         }
-        final double diff = s - prev;
-        highFreqDiffSum += diff * diff;
         prev = s;
       }
 

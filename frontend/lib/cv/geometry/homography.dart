@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:equatable/equatable.dart';
 import 'package:gully_umpire/cv/geometry/point2d.dart';
 

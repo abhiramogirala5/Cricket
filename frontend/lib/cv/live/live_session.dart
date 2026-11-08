@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:gully_umpire/cv/contracts/audio_analyzer.dart';
 import 'package:gully_umpire/cv/contracts/pose.dart';
+import 'package:gully_umpire/cv/geometry/point2d.dart';
 import 'package:gully_umpire/cv/geometry/polygon.dart';
 import 'package:gully_umpire/cv/live/batter_pose_estimator.dart';
 import 'package:gully_umpire/cv/live/live_analysis.dart';
@@ -12,6 +14,8 @@ import 'package:gully_umpire/cv/live/vision_worker.dart';
 import 'package:gully_umpire/cv/live/zoom_advice.dart';
 import 'package:gully_umpire/cv/pipelines/ball_observation.dart';
 import 'package:gully_umpire/cv/pipelines/pose_sample.dart';
+import 'package:gully_umpire/cv/scene/optical_wicket_tracker.dart';
+import 'package:gully_umpire/cv/vision/luma_frame.dart';
 import 'package:gully_umpire/domain/decisions/wicket_family.dart';
 import 'package:gully_umpire/features/live_camera/camera_distance.dart';
 
@@ -33,6 +37,11 @@ final class LiveSessionStatus {
     this.problem,
     this.deliveries = 0,
     this.batterHeightM,
+    this.batterGroundPoint,
+    this.batterHeightNorm,
+    this.lockedWicketCorners,
+    this.isSpatialAnchorLocked = false,
+    this.trackingConfidence = 0.0,
   });
 
   final LiveWatchState watch;
@@ -75,6 +84,22 @@ final class LiveSessionStatus {
   /// Real standing height of the detected batter (metres), estimated from perspective or profile.
   final double? batterHeightM;
 
+  /// Normalized position of the batter's stance at the crease (groundY at feet, centerX at hips).
+  final Point2D? batterGroundPoint;
+
+  /// Apparent height of the batter in the picture (normalized).
+  final double? batterHeightNorm;
+
+  /// When camera ego-motion tracking (spatial anchor) is active, these are the
+  /// dynamically transformed wicket corners locked onto the real-world physical object.
+  final List<Point2D>? lockedWicketCorners;
+
+  /// Whether the marked wicket is spatially anchored to track camera motion.
+  final bool isSpatialAnchorLocked;
+
+  /// Optical tracking confidence (0.0 to 1.0).
+  final double trackingConfidence;
+
   /// The tracker is ready to see a delivery.
   bool get isWatching => watch == LiveWatchState.watching || watch == LiveWatchState.tracking;
 
@@ -95,6 +120,13 @@ final class LiveSessionStatus {
     bool clearProblem = false,
     int? deliveries,
     double? batterHeightM,
+    Point2D? batterGroundPoint,
+    double? batterHeightNorm,
+    bool clearBatterPose = false,
+    List<Point2D>? lockedWicketCorners,
+    bool clearLockedWicketCorners = false,
+    bool? isSpatialAnchorLocked,
+    double? trackingConfidence,
   }) {
     return LiveSessionStatus(
       watch: watch ?? this.watch,
@@ -112,6 +144,13 @@ final class LiveSessionStatus {
       problem: clearProblem ? null : (problem ?? this.problem),
       deliveries: deliveries ?? this.deliveries,
       batterHeightM: batterHeightM ?? this.batterHeightM,
+      batterGroundPoint: clearBatterPose ? null : (batterGroundPoint ?? this.batterGroundPoint),
+      batterHeightNorm: clearBatterPose ? null : (batterHeightNorm ?? this.batterHeightNorm),
+      lockedWicketCorners: clearLockedWicketCorners
+          ? null
+          : (lockedWicketCorners ?? this.lockedWicketCorners),
+      isSpatialAnchorLocked: isSpatialAnchorLocked ?? this.isSpatialAnchorLocked,
+      trackingConfidence: trackingConfidence ?? this.trackingConfidence,
     );
   }
 }
@@ -133,6 +172,20 @@ abstract interface class LiveSessionPort {
 
   /// Handles one camera picture.
   void onFrame(RawCameraFrame frame);
+
+  /// Runs optical computer vision to detect physical stumps or chair in the camera frame.
+  OpticalWicketResult detectOrRefineWicket({
+    Point2D? searchCenter,
+    WicketFamily family = WicketFamily.traditionalStumps,
+    double? targetDistanceFeet,
+    double zoom = 1.0,
+  });
+
+  /// Locks the spatial anchor onto the specified wicket corners to track camera motion.
+  void lockSpatialAnchor(List<Point2D> corners);
+
+  /// Unlocks the spatial anchor (e.g. while user is dragging corners).
+  void unlockSpatialAnchor();
 
   /// Makes the tracker learn the scene again.
   void relearn();
@@ -177,6 +230,9 @@ final class LiveVisionSession implements LiveSessionPort {
   final BatterPoseEstimator _pose;
   final AudioAnalyzer? _audio;
   final PoseBuffer _poses = PoseBuffer();
+  final OpticalWicketTracker _opticalTracker = OpticalWicketTracker();
+  LumaFrame? _latestLumaFrame;
+  Uint8List? _lumaScratch;
   final StreamController<LiveSessionStatus> _statusController =
       StreamController<LiveSessionStatus>.broadcast();
   final StreamController<LiveDeliveryResult> _resultController =
@@ -235,6 +291,107 @@ final class LiveVisionSession implements LiveSessionPort {
       timestampMs: frame.timestampMs,
     );
     _maybeMeasurePose(frame);
+    _processOpticalTracking(frame);
+  }
+
+  void _processOpticalTracking(RawCameraFrame frame) {
+    final LumaSize size = LumaConverter.outputSize(
+      srcWidth: frame.width,
+      srcHeight: frame.height,
+      rotationDegrees: frame.rotationDegrees,
+      targetLongSide: 320,
+    );
+    final int needed = size.width * size.height;
+    if (_lumaScratch == null || _lumaScratch!.length != needed) {
+      _lumaScratch = Uint8List(needed);
+    }
+    try {
+      LumaConverter.convert(
+        source: frame.yPlane,
+        srcWidth: frame.width,
+        srcHeight: frame.height,
+        rowStride: frame.rowStride,
+        rotationDegrees: frame.rotationDegrees,
+        size: size,
+        out: _lumaScratch!,
+      );
+      _latestLumaFrame = LumaFrame(
+        width: size.width,
+        height: size.height,
+        timestampMs: frame.timestampMs,
+        pixels: _lumaScratch!,
+      );
+      if (_opticalTracker.isAnchorLocked) {
+        final AnchorTrackingResult result = _opticalTracker.updateAnchor(_latestLumaFrame!);
+        if (result.hasMoved) {
+          _status = _status.copyWith(
+            lockedWicketCorners: result.corners,
+            isSpatialAnchorLocked: true,
+            trackingConfidence: result.confidence,
+          );
+          _emit(force: false);
+        }
+      }
+    } on Object {
+      // Ignore frame conversion failure
+    }
+  }
+
+  @override
+  OpticalWicketResult detectOrRefineWicket({
+    Point2D? searchCenter,
+    WicketFamily family = WicketFamily.traditionalStumps,
+    double? targetDistanceFeet,
+    double zoom = 1.0,
+  }) {
+    final LumaFrame? luma = _latestLumaFrame;
+    if (luma != null) {
+      return _opticalTracker.detectOrRefineWicket(
+        frame: luma,
+        searchCenter: searchCenter,
+        family: family,
+        targetDistanceFeet: targetDistanceFeet,
+        zoom: zoom,
+      );
+    }
+    return OpticalWicketResult(
+      corners: smartWicketCorners(
+        family: family,
+        centerX: searchCenter?.x ?? 0.50,
+        groundY: searchCenter?.y ?? 0.65,
+        targetDistanceFeet: targetDistanceFeet,
+        zoom: zoom,
+      ),
+      confidence: 0.50,
+      isOpticallyRefined: false,
+      family: family,
+      statusMessage: 'Aligned with pitch corridor (${family.label})',
+    );
+  }
+
+  @override
+  void lockSpatialAnchor(List<Point2D> corners) {
+    final LumaFrame? luma = _latestLumaFrame;
+    if (luma != null) {
+      _opticalTracker.lockAnchor(corners, luma);
+    }
+    _status = _status.copyWith(
+      lockedWicketCorners: corners,
+      isSpatialAnchorLocked: true,
+      trackingConfidence: 1.0,
+    );
+    _emit(force: true);
+  }
+
+  @override
+  void unlockSpatialAnchor() {
+    _opticalTracker.unlockAnchor();
+    _status = _status.copyWith(
+      isSpatialAnchorLocked: false,
+      clearLockedWicketCorners: true,
+      trackingConfidence: 0.0,
+    );
+    _emit(force: true);
   }
 
   /// Makes the tracker learn the scene again (and forgets that the scene changed).
@@ -296,15 +453,21 @@ final class LiveVisionSession implements LiveSessionPort {
     final bool clearProblem = _status.problem != null && _reportsSinceProblem >= 60;
     final bool poseSeen = _lastFrameMs - _lastPoseOkMs < 2500;
     double? batterHeightM;
+    Point2D? batterGroundPoint;
+    double? batterHeightNorm;
     if (poseSeen) {
       final PoseSample? latest = _poses.latest;
-      final Polygon? wicket = _inputs.wicket;
-      if (latest != null && wicket != null && wicket.isValid) {
-        batterHeightM = estimateOpticalBatsmanHeightM(
-          batterHeightNorm: latest.heightNorm,
-          wicket: wicket,
-          family: _inputs.wicketFamily ?? WicketFamily.traditionalStumps,
-        );
+      if (latest != null) {
+        batterGroundPoint = Point2D(latest.centerX, latest.groundY);
+        batterHeightNorm = latest.heightNorm;
+        final Polygon? wicket = _inputs.wicket;
+        if (wicket != null && wicket.isValid) {
+          batterHeightM = estimateOpticalBatsmanHeightM(
+            batterHeightNorm: latest.heightNorm,
+            wicket: wicket,
+            family: _inputs.wicketFamily ?? WicketFamily.traditionalStumps,
+          );
+        }
       }
       batterHeightM ??= _inputs.batsmanHeightM > 0 ? _inputs.batsmanHeightM : null;
     }
@@ -320,6 +483,9 @@ final class LiveVisionSession implements LiveSessionPort {
       trail: report.trail,
       poseSeen: poseSeen,
       batterHeightM: batterHeightM,
+      batterGroundPoint: batterGroundPoint,
+      batterHeightNorm: batterHeightNorm,
+      clearBatterPose: !poseSeen,
       zoom: _zoomAdvice(decoded.height),
       sceneChanged: sceneChanged,
       clearProblem: clearProblem,

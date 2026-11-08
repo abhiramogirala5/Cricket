@@ -103,6 +103,40 @@ void main() {
       expect(corners[2].y, closeTo(0.74, 1e-4));
     });
 
+    test('snaps to batter crease stance and scales height relative to detected batter', () {
+      final List<Point2D> corners = autoDetectWicketCorners(
+        batterGroundPoint: const Point2D(0.55, 0.70),
+        batterHeightNorm: 0.35,
+        family: WicketFamily.traditionalStumps,
+      );
+      expect(corners, hasLength(4));
+      // Base Y anchored at batter ground point (0.70)
+      expect(corners[2].y, closeTo(0.70, 1e-4));
+      expect(corners[3].y, closeTo(0.70, 1e-4));
+      // Mid X centered at batter crease (0.55)
+      final double midX = (corners[0].x + corners[1].x) / 2;
+      expect(midX, closeTo(0.55, 1e-4));
+      // Height scaled accurately to 28-inch stumps relative to ~1.58m stance batter
+      final double height = corners[2].y - corners[0].y;
+      expect(height, closeTo((0.35 / 1.58) * 0.7112, 1e-3));
+    });
+
+    test('snaps to batter crease stance for chair wicket with chair aspect ratio', () {
+      final List<Point2D> corners = autoDetectWicketCorners(
+        batterGroundPoint: const Point2D(0.48, 0.72),
+        batterHeightNorm: 0.30,
+        family: WicketFamily.chair,
+      );
+      expect(corners, hasLength(4));
+      expect(corners[2].y, closeTo(0.72, 1e-4));
+      final double midX = (corners[0].x + corners[1].x) / 2;
+      expect(midX, closeTo(0.48, 1e-4));
+      final double height = corners[2].y - corners[0].y;
+      final double width = corners[1].x - corners[0].x;
+      expect(height, closeTo((0.30 / 1.58) * 0.78, 1e-3));
+      expect(width, closeTo(height * (0.14 / 0.18), 1e-3));
+    });
+
     test('ignores candidates outside the pitch corridor', () {
       const List<BallObservation> farEdgeBlobs = <BallObservation>[
         BallObservation(

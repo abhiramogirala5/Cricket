@@ -173,7 +173,15 @@ SpeedEstimate? estimateDepthSpeed({
     0,
     SpeedEstimator.maxConfidence,
   );
-  return SpeedEstimate(kmph: kmph, confidence: confidence, uncertaintyKmph: kmph * relative);
+  final double releaseKmph = kmph * 1.06;
+  final double creaseKmph = kmph * (bounce.bounced ? 0.78 : 0.92);
+  return SpeedEstimate(
+    kmph: kmph,
+    confidence: confidence,
+    uncertaintyKmph: kmph * relative,
+    releaseKmph: releaseKmph,
+    creaseKmph: creaseKmph,
+  );
 }
 
 /// Estimates the ball speed from the Time-Of-Flight (TOF) between release and arrival,
@@ -308,6 +316,14 @@ SpeedEstimate? estimateTimeOfFlightSpeed({
     SpeedEstimator.maxConfidence,
   );
 
-  return SpeedEstimate(kmph: kmph, confidence: confidence, uncertaintyKmph: kmph * relative);
+  final double releaseKmph = kmph * 1.06;
+  final double creaseKmph = kmph * (bounce.bounced ? 0.78 : 0.92);
+  return SpeedEstimate(
+    kmph: kmph,
+    confidence: confidence,
+    uncertaintyKmph: kmph * relative,
+    releaseKmph: releaseKmph,
+    creaseKmph: creaseKmph,
+  );
 }
 

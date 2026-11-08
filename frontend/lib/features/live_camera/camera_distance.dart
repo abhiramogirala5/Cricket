@@ -186,17 +186,56 @@ List<Point2D> smartWicketCorners({
   ];
 }
 
-/// Auto-detects wicket corners from live optical candidate observations or pitch corridor heuristics.
+/// Auto-detects wicket corners from live batter pose, optical observations, or pitch heuristics.
 ///
-/// Looks for high-contrast optical clusters within the central pitch corridor (x: 0.25..0.75, y: 0.30..0.85).
-/// When optical candidates exist, computes their horizontal center and base; otherwise anchors at pitch center.
-/// On long pitches, [targetDistanceFeet] scales the wicket bounds to perspective dimensions.
+/// When a batter is visible at the crease ([batterGroundPoint] and [batterHeightNorm]),
+/// aligns the wicket directly to the striker's stance plane and scales its apparent dimensions
+/// from the known physical height of [family] relative to a human batter (~1.75 m upright, ~1.58 m in stance).
+///
+/// If no batter is visible, checks for optical candidates in the pitch corridor,
+/// or falls back to perspective-scaled pitch defaults for [family] at [targetDistanceFeet].
 List<Point2D> autoDetectWicketCorners({
+  Point2D? batterGroundPoint,
+  double? batterHeightNorm,
   List<BallObservation> candidates = const <BallObservation>[],
   WicketFamily family = WicketFamily.traditionalStumps,
   double? targetDistanceFeet,
   double zoom = 1.0,
 }) {
+  final (double baseW, double baseH) = switch (family) {
+    WicketFamily.traditionalStumps => (0.08, 0.16),
+    WicketFamily.chair => (0.14, 0.18),
+    WicketFamily.bucket => (0.12, 0.12),
+    WicketFamily.brickStack => (0.10, 0.14),
+    WicketFamily.bottleStack => (0.10, 0.12),
+    WicketFamily.coneStack => (0.10, 0.14),
+    WicketFamily.bagOrObject => (0.12, 0.14),
+    WicketFamily.wallTarget => (0.10, 0.16),
+    WicketFamily.unknownPhysicalObject => (0.10, 0.14),
+  };
+
+  if (batterGroundPoint != null && batterHeightNorm != null && batterHeightNorm > 0.05) {
+    final double realWicketHeightM = typicalWicketHeightMetres(family);
+    // Real upright human height is ~1.75 m. Batting stance knee flexion reduces apparent height to ~1.58 m.
+    const double stanceBatterHeightM = 1.58;
+    final double h = ((batterHeightNorm / stanceBatterHeightM) * realWicketHeightM).clamp(0.02, 0.35);
+    final double w = (h * (baseW / baseH)).clamp(0.015, 0.25);
+
+    final double centerX = batterGroundPoint.x.clamp(0.15, 0.85);
+    final double groundY = batterGroundPoint.y.clamp(0.20, 0.95);
+
+    final double left = centerX - w / 2;
+    final double right = centerX + w / 2;
+    final double top = groundY - h;
+    final double bottom = groundY;
+    return <Point2D>[
+      Point2D(left, top),
+      Point2D(right, top),
+      Point2D(right, bottom),
+      Point2D(left, bottom),
+    ];
+  }
+
   final List<BallObservation> corridorCandidates = <BallObservation>[
     for (final BallObservation c in candidates)
       if (c.x >= 0.25 && c.x <= 0.75 && c.y >= 0.30 && c.y <= 0.85) c,

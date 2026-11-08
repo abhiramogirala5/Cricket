@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:gully_umpire/cv/device/device_policy.dart';
+import 'package:gully_umpire/cv/geometry/point2d.dart';
 import 'package:gully_umpire/cv/live/ball_kind.dart';
 import 'package:gully_umpire/cv/live/batter_pose_estimator.dart';
 import 'package:gully_umpire/cv/live/frame_source.dart';
@@ -10,6 +11,9 @@ import 'package:gully_umpire/cv/live/live_session.dart';
 import 'package:gully_umpire/cv/live/live_tracker.dart';
 import 'package:gully_umpire/cv/pipelines/delivery_context.dart';
 import 'package:gully_umpire/cv/rules/umpiring_rules.dart';
+import 'package:gully_umpire/cv/scene/optical_wicket_tracker.dart';
+import 'package:gully_umpire/domain/decisions/wicket_family.dart';
+import 'package:gully_umpire/features/live_camera/camera_distance.dart';
 
 import 'replay_fixtures.dart';
 
@@ -159,6 +163,46 @@ final class FakeLiveSession implements LiveSessionPort {
   @override
   void onFrame(RawCameraFrame frame) {
     frames += 1;
+  }
+
+  @override
+  OpticalWicketResult detectOrRefineWicket({
+    Point2D? searchCenter,
+    WicketFamily family = WicketFamily.traditionalStumps,
+    double? targetDistanceFeet,
+    double zoom = 1.0,
+  }) {
+    return OpticalWicketResult(
+      corners: smartWicketCorners(
+        family: family,
+        centerX: searchCenter?.x ?? 0.50,
+        groundY: searchCenter?.y ?? 0.65,
+        targetDistanceFeet: targetDistanceFeet,
+        zoom: zoom,
+      ),
+      confidence: 0.85,
+      isOpticallyRefined: true,
+      family: family,
+      statusMessage: 'Wicket locked (${family.label})',
+    );
+  }
+
+  @override
+  void lockSpatialAnchor(List<Point2D> corners) {
+    emitStatus(_current.copyWith(
+      lockedWicketCorners: corners,
+      isSpatialAnchorLocked: true,
+      trackingConfidence: 1.0,
+    ));
+  }
+
+  @override
+  void unlockSpatialAnchor() {
+    emitStatus(_current.copyWith(
+      isSpatialAnchorLocked: false,
+      clearLockedWicketCorners: true,
+      trackingConfidence: 0.0,
+    ));
   }
 
   @override
