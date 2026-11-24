@@ -181,12 +181,14 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
     final bool hasPose = status.poseSeen && status.batterGroundPoint != null;
     final double currentDist = _distance.isValid ? _distance.feet! : 66.0;
 
-    final Point2D searchCenter = status.batterGroundPoint ?? const Point2D(0.50, 0.65);
+    // If batter pose is visible, anchor near the batter crease; otherwise scan the pitch corridor
+    final Point2D? searchCenter = hasPose ? status.batterGroundPoint : null;
     final OpticalWicketResult optical = _controller.detectOrRefineWicket(
       searchCenter: searchCenter,
       family: _family,
       targetDistanceFeet: currentDist,
       zoom: _controller.zoom,
+      isCentroid: false,
     );
 
     final List<Point2D> finalCorners;
@@ -321,6 +323,7 @@ class _StumpMarkingViewState extends ConsumerState<StumpMarkingView> {
       family: _family,
       targetDistanceFeet: currentDist,
       zoom: _controller.zoom,
+      isCentroid: true,
     );
 
     setState(() {

@@ -179,6 +179,7 @@ abstract interface class LiveSessionPort {
     WicketFamily family = WicketFamily.traditionalStumps,
     double? targetDistanceFeet,
     double zoom = 1.0,
+    bool isCentroid = false,
   });
 
   /// Locks the spatial anchor onto the specified wicket corners to track camera motion.
@@ -249,6 +250,7 @@ final class LiveVisionSession implements LiveSessionPort {
   int _lastPoseMs = -1000000;
   int _lastPoseOkMs = -1000000;
   int _lastFrameMs = 0;
+  int _lastOpticalFrameMs = 0;
   int _lastEmitMs = -1000000;
   int _reportsSinceProblem = 0;
   Future<void> _analysisQueue = Future<void>.value();
@@ -295,6 +297,14 @@ final class LiveVisionSession implements LiveSessionPort {
   }
 
   void _processOpticalTracking(RawCameraFrame frame) {
+    final bool isLocked = _opticalTracker.isAnchorLocked;
+    // When anchor is not locked, throttle UI-thread Luma conversion to 3 Hz (every 330ms)
+    // to preserve a fresh frame for tap-to-detect without bogging down the main thread.
+    if (!isLocked && frame.timestampMs - _lastOpticalFrameMs < 330) {
+      return;
+    }
+    _lastOpticalFrameMs = frame.timestampMs;
+
     final LumaSize size = LumaConverter.outputSize(
       srcWidth: frame.width,
       srcHeight: frame.height,
@@ -343,6 +353,7 @@ final class LiveVisionSession implements LiveSessionPort {
     WicketFamily family = WicketFamily.traditionalStumps,
     double? targetDistanceFeet,
     double zoom = 1.0,
+    bool isCentroid = false,
   }) {
     final LumaFrame? luma = _latestLumaFrame;
     if (luma != null) {
@@ -352,6 +363,7 @@ final class LiveVisionSession implements LiveSessionPort {
         family: family,
         targetDistanceFeet: targetDistanceFeet,
         zoom: zoom,
+        isCentroid: isCentroid,
       );
     }
     return OpticalWicketResult(
@@ -361,6 +373,7 @@ final class LiveVisionSession implements LiveSessionPort {
         groundY: searchCenter?.y ?? 0.65,
         targetDistanceFeet: targetDistanceFeet,
         zoom: zoom,
+        isCentroid: isCentroid,
       ),
       confidence: 0.50,
       isOpticallyRefined: false,

@@ -67,11 +67,53 @@ final class _AnchorPoint {
     required this.u,
     required this.v,
     required this.patch,
-  });
+    Uint8List? originalPatch,
+  }) : originalPatch = originalPatch ?? Uint8List.fromList(patch);
 
   double u;
   double v;
-  final Uint8List patch;
+  Uint8List patch;
+  final Uint8List originalPatch;
+
+  /// Blends current appearance into the tracking patch while guarding against drift
+  /// from the reference [originalPatch].
+  void adapt(Uint8List currentPixels, int width, int height, int patchRadius) {
+    final int u0 = u.round();
+    final int v0 = v.round();
+    final int pDiam = 2 * patchRadius + 1;
+    final int pCount = pDiam * pDiam;
+
+    if (u0 < patchRadius ||
+        u0 >= width - patchRadius ||
+        v0 < patchRadius ||
+        v0 >= height - patchRadius) {
+      return;
+    }
+
+    int driftSad = 0;
+    int pIdx = 0;
+    for (int dy = -patchRadius; dy <= patchRadius; dy++) {
+      final int rOffset = (v0 + dy) * width;
+      for (int dx = -patchRadius; dx <= patchRadius; dx++) {
+        final int curVal = currentPixels[rOffset + u0 + dx];
+        final int diff = curVal - originalPatch[pIdx++];
+        driftSad += diff < 0 ? -diff : diff;
+      }
+    }
+
+    // Only adapt if pixel difference from initial anchor is reasonable (< 42 avg gray difference)
+    if (driftSad / pCount < 42.0) {
+      pIdx = 0;
+      for (int dy = -patchRadius; dy <= patchRadius; dy++) {
+        final int rOffset = (v0 + dy) * width;
+        for (int dx = -patchRadius; dx <= patchRadius; dx++) {
+          final int curVal = currentPixels[rOffset + u0 + dx];
+          patch[pIdx] = ((patch[pIdx] * 90 + curVal * 10) ~/ 100).clamp(0, 255);
+          pIdx++;
+        }
+      }
+    }
+  }
 }
 
 /// Computer vision pipeline for:
@@ -93,6 +135,8 @@ final class OpticalWicketTracker {
   List<Point2D>? _corners;
   List<_AnchorPoint>? _anchors;
   bool _isLocked = false;
+  int _consecutiveLossCount = 0;
+  int _adaptCounter = 0;
 
   bool get isAnchorLocked => _isLocked && _corners != null && _anchors != null;
   List<Point2D>? get currentCorners => _corners != null ? List<Point2D>.unmodifiable(_corners!) : null;
@@ -105,14 +149,65 @@ final class OpticalWicketTracker {
     WicketFamily family = WicketFamily.traditionalStumps,
     double? targetDistanceFeet,
     double zoom = 1.0,
+    bool isCentroid = false,
   }) {
+    // If no explicit search center was specified (e.g. auto-detect without batter pose),
+    // scan candidate positions along the pitch corridor to find the actual physical wicket.
+    if (searchCenter == null) {
+      const List<Point2D> corridorCandidates = <Point2D>[
+        Point2D(0.50, 0.65),
+        Point2D(0.44, 0.65),
+        Point2D(0.56, 0.65),
+        Point2D(0.50, 0.58),
+        Point2D(0.50, 0.72),
+      ];
+      OpticalWicketResult? bestResult;
+      for (final Point2D cand in corridorCandidates) {
+        final OpticalWicketResult candResult = _evaluateWicketAt(
+          frame: frame,
+          center: cand,
+          family: family,
+          targetDistanceFeet: targetDistanceFeet,
+          zoom: zoom,
+          isCentroid: false,
+        );
+        if (candResult.isOpticallyRefined) {
+          if (bestResult == null || candResult.confidence > bestResult.confidence) {
+            bestResult = candResult;
+          }
+        }
+      }
+      if (bestResult != null) {
+        return bestResult;
+      }
+    }
+
     final Point2D center = searchCenter ?? const Point2D(0.50, 0.65);
+    return _evaluateWicketAt(
+      frame: frame,
+      center: center,
+      family: family,
+      targetDistanceFeet: targetDistanceFeet,
+      zoom: zoom,
+      isCentroid: isCentroid,
+    );
+  }
+
+  OpticalWicketResult _evaluateWicketAt({
+    required LumaFrame frame,
+    required Point2D center,
+    required WicketFamily family,
+    double? targetDistanceFeet,
+    double zoom = 1.0,
+    bool isCentroid = false,
+  }) {
     final List<Point2D> fallbackCorners = smartWicketCorners(
       family: family,
       centerX: center.x,
       groundY: center.y,
       targetDistanceFeet: targetDistanceFeet,
       zoom: zoom,
+      isCentroid: isCentroid,
     );
 
     final int width = frame.width;
@@ -134,10 +229,17 @@ final class OpticalWicketTracker {
     final int cx = (center.x * width).round().clamp(10, width - 10);
     final int cy = (center.y * height).round().clamp(10, height - 10);
 
-    // Search window: horizontal expansion +/- 1.4x prior width, vertical +/- 1.2x prior height
-    final int roiHalfW = (priorW * 0.70).round().clamp(8, width ~/ 3);
-    final int roiTopH = (priorH * 0.85).round().clamp(12, height ~/ 2);
-    final int roiBottomH = (priorH * 0.35).round().clamp(6, height ~/ 4);
+    // Search window: horizontal expansion +/- 1.5x prior width
+    final int roiHalfW = (priorW * 0.75).round().clamp(8, width ~/ 3);
+    final int roiTopH;
+    final int roiBottomH;
+    if (isCentroid) {
+      roiTopH = (priorH * 0.75).round().clamp(10, height ~/ 2);
+      roiBottomH = (priorH * 0.75).round().clamp(10, height ~/ 2);
+    } else {
+      roiTopH = (priorH * 0.90).round().clamp(12, height ~/ 2);
+      roiBottomH = (priorH * 0.40).round().clamp(6, height ~/ 4);
+    }
 
     final int xMin = math.max(1, cx - roiHalfW);
     final int xMax = math.min(width - 2, cx + roiHalfW);
@@ -173,21 +275,37 @@ final class OpticalWicketTracker {
       }
     }
 
+    // 3-point moving average smoothing to eliminate texture noise
+    final List<int> smoothed = List<int>.filled(roiWidth, 0);
+    int maxSmoothGrad = 0;
+    for (int i = 0; i < roiWidth; i++) {
+      final int prev = i > 0 ? colGrad[i - 1] : colGrad[i];
+      final int next = i < roiWidth - 1 ? colGrad[i + 1] : colGrad[i];
+      final int sm = (prev + 2 * colGrad[i] + next) ~/ 4;
+      smoothed[i] = sm;
+      if (sm > maxSmoothGrad) {
+        maxSmoothGrad = sm;
+      }
+    }
+
     final double meanGrad = totalGrad / (roiWidth * math.max(1, (roiHeight ~/ 2)));
 
     // Find outer vertical edge peaks that enclose the wicket
     int peakLeft = -1;
     int peakRight = -1;
-    final int gradThreshold = math.max(12, (meanGrad * 1.35).round());
+    final int gradThreshold = math.max(12, (meanGrad * 1.30).round());
 
     for (int i = 0; i < roiWidth; i++) {
-      if (colGrad[i] >= gradThreshold) {
+      if (smoothed[i] >= gradThreshold) {
         if (peakLeft == -1) peakLeft = i;
         peakRight = i;
       }
     }
 
-    final bool edgesFound = totalGrad > 60 && peakLeft != -1 && peakRight > peakLeft && (peakRight - peakLeft) >= 3;
+    final bool edgesFound = totalGrad > 60 &&
+        peakLeft != -1 &&
+        peakRight > peakLeft &&
+        (peakRight - peakLeft) >= 3;
 
     final double detectedLeft;
     final double detectedRight;
@@ -199,11 +317,12 @@ final class OpticalWicketTracker {
       detectedRight = fallbackCorners[1].x;
     }
 
-    // Step 2: Row edge profile along detected columns to find top (bails/top bar) and base (ground)
+    // Step 2: Row edge profile along detected columns to find top (bails/top rail) and base (ground)
     final int scanX0 = ((detectedLeft * width).round()).clamp(1, width - 2);
     final int scanX1 = ((detectedRight * width).round()).clamp(scanX0 + 1, width - 2);
 
     final List<int> rowGrad = List<int>.filled(roiHeight, 0);
+    int maxRowGrad = 0;
     for (int y = yMin; y < yMax; y++) {
       int rSum = 0;
       final int rowAbove = (y - 1) * width;
@@ -211,21 +330,18 @@ final class OpticalWicketTracker {
       for (int x = scanX0; x <= scanX1; x++) {
         rSum += (pixels[rowBelow + x] - pixels[rowAbove + x]).abs();
       }
-      rowGrad[y - yMin] = rSum;
+      final int idx = y - yMin;
+      rowGrad[idx] = rSum;
+      if (rSum > maxRowGrad) {
+        maxRowGrad = rSum;
+      }
     }
 
     // Top is near the start of high vertical edges; base is where vertical edges stop
     int bestTopY = yMin;
     int bestBaseY = yMax;
 
-    int maxRowGrad = 0;
-    for (int i = 0; i < roiHeight; i++) {
-      if (rowGrad[i] > maxRowGrad) {
-        maxRowGrad = rowGrad[i];
-      }
-    }
-
-    final int rowThresh = (maxRowGrad * 0.40).round();
+    final int rowThresh = (maxRowGrad * 0.35).round();
     for (int i = 0; i < roiHeight; i++) {
       if (rowGrad[i] >= rowThresh) {
         bestTopY = yMin + i;
@@ -248,8 +364,13 @@ final class OpticalWicketTracker {
 
     // Guard against noise collapse or expansion
     if (detectedHeight < priorH / (2.0 * height) || detectedHeight > (priorH * 2.2) / height) {
-      detectedBottom = (cy / height).clamp(0.15, 0.98);
-      detectedTop = (detectedBottom - (priorH / height)).clamp(0.05, 0.90);
+      if (isCentroid) {
+        detectedTop = (cy / height - priorH / (2.0 * height)).clamp(0.05, 0.90);
+        detectedBottom = (cy / height + priorH / (2.0 * height)).clamp(detectedTop + 0.04, 0.98);
+      } else {
+        detectedBottom = (cy / height).clamp(0.15, 0.98);
+        detectedTop = (detectedBottom - (priorH / height)).clamp(0.05, 0.90);
+      }
     }
 
     final double midX = (detectedLeft + detectedRight) / 2;
@@ -264,7 +385,7 @@ final class OpticalWicketTracker {
       Point2D(left, detectedBottom),
     ];
 
-    final double confidence = edgesFound ? 0.92 : 0.65;
+    final double confidence = edgesFound ? 0.94 : 0.65;
     final String message = edgesFound
         ? 'Physical edges locked (${family.label})'
         : 'Aligned with pitch corridor (${family.label})';
@@ -331,6 +452,8 @@ final class OpticalWicketTracker {
 
     _anchors = anchors;
     _isLocked = anchors.isNotEmpty;
+    _consecutiveLossCount = 0;
+    _adaptCounter = 0;
   }
 
   /// Tracks frame-to-frame camera ego-motion (optical displacement) and updates polygon corners
@@ -414,22 +537,45 @@ final class OpticalWicketTracker {
         }
       }
 
-      // Check average pixel error (< 40 gray levels)
-      if (bestSAD / pCount < 40.0) {
+      // Check average pixel error and ensure matched region has contrast (reject uniform occlusion)
+      int minVal = 255;
+      int maxVal = 0;
+      for (int py = -patchRadius; py <= patchRadius; py++) {
+        final int rOffset = (v0 + bestDv + py) * width;
+        for (int px = -patchRadius; px <= patchRadius; px++) {
+          final int v = pixels[rOffset + u0 + bestDu + px];
+          if (v < minVal) minVal = v;
+          if (v > maxVal) maxVal = v;
+        }
+      }
+
+      if (maxVal - minVal >= 12 && bestSAD / pCount < 38.0) {
         dispX.add(bestDu);
         dispY.add(bestDv);
       }
     }
 
-    if (dispX.isEmpty || dispY.isEmpty) {
+    if (dispX.isEmpty || dispY.isEmpty || dispX.length < (anchors.length * 0.30).ceil()) {
+      _consecutiveLossCount++;
+      // Auto-recovery attempt: if tracking lost for 1-6 frames, attempt a wider search
+      // using the baseline reference patch to re-acquire the anchor.
+      if (_consecutiveLossCount >= 1 && _consecutiveLossCount <= 6) {
+        final AnchorTrackingResult? recovered = _attemptRecovery(frame, corners, anchors);
+        if (recovered != null) {
+          _consecutiveLossCount = 0;
+          return recovered;
+        }
+      }
       // Camera motion too fast or target occluded; maintain position
       return AnchorTrackingResult(
         corners: corners,
         displacement: const Point2D(0, 0),
-        confidence: 0.30,
+        confidence: (_consecutiveLossCount > 4) ? 0.15 : 0.30,
         hasMoved: false,
       );
     }
+
+    _consecutiveLossCount = 0;
 
     // Robust median displacement
     dispX.sort();
@@ -462,6 +608,16 @@ final class OpticalWicketTracker {
 
     final double confidence = (dispX.length / anchors.length).clamp(0.2, 1.0);
 
+    // Template Maintenance: periodic adaptation under high confidence to prevent illumination drift
+    if (confidence >= 0.70) {
+      _adaptCounter++;
+      if (_adaptCounter % 4 == 0) {
+        for (final _AnchorPoint a in anchors) {
+          a.adapt(pixels, width, height, patchRadius);
+        }
+      }
+    }
+
     return AnchorTrackingResult(
       corners: _corners!,
       displacement: Point2D(normDx, normDy),
@@ -470,9 +626,112 @@ final class OpticalWicketTracker {
     );
   }
 
+  /// Attempts a wider search to re-acquire anchor points after temporary tracking loss.
+  AnchorTrackingResult? _attemptRecovery(
+    LumaFrame frame,
+    List<Point2D> corners,
+    List<_AnchorPoint> anchors,
+  ) {
+    final int width = frame.width;
+    final int height = frame.height;
+    final Uint8List pixels = frame.pixels;
+    final int pDiam = 2 * patchRadius + 1;
+    final int pCount = pDiam * pDiam;
+    final int wideRadius = (searchRadiusPixels * 1.8).round();
+
+    final List<int> recoveredDx = <int>[];
+    final List<int> recoveredDy = <int>[];
+
+    for (final _AnchorPoint a in anchors) {
+      final int u0 = a.u.round();
+      final int v0 = a.v.round();
+
+      if (u0 < patchRadius + wideRadius ||
+          u0 >= width - patchRadius - wideRadius ||
+          v0 < patchRadius + wideRadius ||
+          v0 >= height - patchRadius - wideRadius) {
+        continue;
+      }
+
+      int bestSAD = 1 << 30;
+      int bestDu = 0;
+      int bestDv = 0;
+
+      // Coarse wider search (step = 3)
+      for (int dv = -wideRadius; dv <= wideRadius; dv += 3) {
+        for (int du = -wideRadius; du <= wideRadius; du += 3) {
+          int sad = 0;
+          int pIdx = 0;
+          for (int py = -patchRadius; py <= patchRadius; py++) {
+            final int rOffset = (v0 + dv + py) * width;
+            for (int px = -patchRadius; px <= patchRadius; px++) {
+              final int diff = pixels[rOffset + u0 + du + px] - a.originalPatch[pIdx++];
+              sad += diff < 0 ? -diff : diff;
+            }
+          }
+          if (sad < bestSAD) {
+            bestSAD = sad;
+            bestDu = du;
+            bestDv = dv;
+          }
+        }
+      }
+
+      // Ensure the candidate region has sufficient contrast (not uniform occlusion/blank frame)
+      int minVal = 255;
+      int maxVal = 0;
+      for (int py = -patchRadius; py <= patchRadius; py++) {
+        final int rOffset = (v0 + bestDv + py) * width;
+        for (int px = -patchRadius; px <= patchRadius; px++) {
+          final int v = pixels[rOffset + u0 + bestDu + px];
+          if (v < minVal) minVal = v;
+          if (v > maxVal) maxVal = v;
+        }
+      }
+
+      if (maxVal - minVal >= 14 && bestSAD / pCount < 28.0) {
+        recoveredDx.add(bestDu);
+        recoveredDy.add(bestDv);
+      }
+    }
+
+    if (recoveredDx.length >= 3) {
+      recoveredDx.sort();
+      recoveredDy.sort();
+      final int medianDu = recoveredDx[recoveredDx.length ~/ 2];
+      final int medianDv = recoveredDy[recoveredDy.length ~/ 2];
+      final double normDx = medianDu / width;
+      final double normDy = medianDv / height;
+
+      final List<Point2D> recoveredCorners = <Point2D>[
+        for (final Point2D p in corners)
+          Point2D(
+            (p.x + normDx).clamp(0.02, 0.98),
+            (p.y + normDy).clamp(0.02, 0.98),
+          ),
+      ];
+      _corners = recoveredCorners;
+
+      for (final _AnchorPoint a in anchors) {
+        a.u = (a.u + medianDu).clamp(patchRadius.toDouble(), (width - patchRadius - 1).toDouble());
+        a.v = (a.v + medianDv).clamp(patchRadius.toDouble(), (height - patchRadius - 1).toDouble());
+      }
+
+      return AnchorTrackingResult(
+        corners: recoveredCorners,
+        displacement: Point2D(normDx, normDy),
+        confidence: 0.60,
+        hasMoved: true,
+      );
+    }
+    return null;
+  }
+
   /// Unlocks the spatial anchor (e.g. while the user is manually dragging corners).
   void unlockAnchor() {
     _isLocked = false;
     _anchors = null;
+    _consecutiveLossCount = 0;
+    _adaptCounter = 0;
   }
 }

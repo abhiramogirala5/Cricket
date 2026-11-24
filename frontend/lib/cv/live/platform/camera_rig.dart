@@ -23,6 +23,7 @@ final class CameraRig implements FrameSource {
   final CameraDescription _description;
   final Stopwatch _clock;
 
+  Timer? _lockTimer;
   bool _streaming = false;
   bool _disposed = false;
 
@@ -63,9 +64,16 @@ final class CameraRig implements FrameSource {
     );
     try {
       await controller.initialize();
-    } on CameraException catch (error) {
-      await controller.dispose();
-      throw CameraRigException(_describe(error));
+    } catch (error) {
+      try {
+        await controller.dispose();
+      } catch (_) {
+        // Ignore surface release errors during failed initialization
+      }
+      if (error is CameraException) {
+        throw CameraRigException(_describe(error));
+      }
+      throw CameraRigException('The camera could not be opened: $error');
     }
     final CameraRig rig = CameraRig._(controller, back, Stopwatch()..start());
     try {
@@ -118,11 +126,13 @@ final class CameraRig implements FrameSource {
     _streaming = true;
     // A scene far away does not need the camera to hunt for focus (or to change its exposure,
     // which the tracker would see as the whole picture changing) while the ball flies past.
-    unawaited(_lockFocusAndExposureSoon());
+    _lockTimer?.cancel();
+    _lockTimer = Timer(const Duration(milliseconds: 1500), () {
+      unawaited(_lockFocusAndExposure());
+    });
   }
 
-  Future<void> _lockFocusAndExposureSoon() async {
-    await Future<void>.delayed(const Duration(milliseconds: 1500));
+  Future<void> _lockFocusAndExposure() async {
     if (_disposed) {
       return;
     }
@@ -196,14 +206,21 @@ final class CameraRig implements FrameSource {
       return;
     }
     _disposed = true;
+    _lockTimer?.cancel();
+    _lockTimer = null;
     if (_streaming) {
       _streaming = false;
       try {
         await controller.stopImageStream();
-      } on CameraException {
+      } catch (_) {
         // Already stopped.
       }
     }
-    await controller.dispose();
+    try {
+      await controller.dispose();
+    } catch (_) {
+      // In Android CameraX, releaseFlutterSurfaceTexture() may throw if the surface producer
+      // was already released or detached by Flutter. Silently swallow to prevent app crashes.
+    }
   }
 }

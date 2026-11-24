@@ -17,7 +17,7 @@ import 'package:gully_umpire/domain/sync/sync.dart';
 /// Every method saves the change AND (when an account is in use) its outbox event in one
 /// database transaction, so the phone and the sync queue can never disagree. All scoring rules
 /// come from `ScoreEngine`, the same rules the server applies.
-final class MatchRepository {
+class MatchRepository {
   MatchRepository({
     required LocalStore store,
     required AppClock clock,

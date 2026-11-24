@@ -34,7 +34,7 @@ class CameraPreviewBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final FrameSource? current = source;
     final Widget picture;
-    if (current is CameraRig) {
+    if (current is CameraRig && current.controller.value.isInitialized) {
       picture = CameraPreview(current.controller, child: overlay);
     } else {
       picture = AspectRatio(

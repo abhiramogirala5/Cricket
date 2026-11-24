@@ -74,5 +74,27 @@ void main() {
       );
       expect(find.text('No balls yet.'), findsOneWidget);
     });
+
+    testWidgets('tapping a ball chip invokes onBallTap with the ball index', (WidgetTester tester) async {
+      int? tappedIndex;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: OverStrip(
+              labels: const <String>['0', '4', 'W'],
+              showingCompletedOver: false,
+              onBallTap: (int index) => tappedIndex = index,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Tap ball to review'), findsOneWidget);
+      await tester.tap(find.text('4'));
+      expect(tappedIndex, 1);
+
+      await tester.tap(find.text('W'));
+      expect(tappedIndex, 2);
+    });
   });
 }

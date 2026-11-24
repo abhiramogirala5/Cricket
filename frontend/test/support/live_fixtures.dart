@@ -171,6 +171,7 @@ final class FakeLiveSession implements LiveSessionPort {
     WicketFamily family = WicketFamily.traditionalStumps,
     double? targetDistanceFeet,
     double zoom = 1.0,
+    bool isCentroid = false,
   }) {
     return OpticalWicketResult(
       corners: smartWicketCorners(
@@ -179,6 +180,7 @@ final class FakeLiveSession implements LiveSessionPort {
         groundY: searchCenter?.y ?? 0.65,
         targetDistanceFeet: targetDistanceFeet,
         zoom: zoom,
+        isCentroid: isCentroid,
       ),
       confidence: 0.85,
       isOpticallyRefined: true,

@@ -147,6 +147,7 @@ List<Point2D> smartWicketCorners({
   double groundY = 0.65,
   double? targetDistanceFeet,
   double zoom = 1.0,
+  bool isCentroid = false,
 }) {
   final (double baseW, double baseH) = switch (family) {
     WicketFamily.traditionalStumps => (0.08, 0.16),
@@ -176,8 +177,8 @@ List<Point2D> smartWicketCorners({
 
   final double left = centerX - w / 2;
   final double right = centerX + w / 2;
-  final double top = groundY - h;
-  final double bottom = groundY;
+  final double top = isCentroid ? (groundY - h / 2) : (groundY - h);
+  final double bottom = isCentroid ? (groundY + h / 2) : groundY;
   return <Point2D>[
     Point2D(left, top),
     Point2D(right, top),

@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:gully_umpire/cv/pipelines/pose_sample.dart';
 
 /// The most recent batter poses, oldest first, kept in time order and bounded in size.
@@ -14,7 +16,7 @@ final class PoseBuffer {
   /// Most samples kept.
   final int maxSamples;
 
-  final List<PoseSample> _samples = <PoseSample>[];
+  final ListQueue<PoseSample> _samples = ListQueue<PoseSample>();
 
   int get length => _samples.length;
 
@@ -32,7 +34,7 @@ final class PoseBuffer {
     _samples.add(sample);
     while (_samples.length > maxSamples ||
         (_samples.isNotEmpty && sample.timestampMs - _samples.first.timestampMs > maxAgeMs)) {
-      _samples.removeAt(0);
+      _samples.removeFirst();
     }
   }
 

@@ -62,11 +62,17 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
   Timer? _countdownTimer;
   int _deliveryTimeoutSeconds = LiveSettings.defaultDeliveryTimeoutSeconds;
 
+  bool _continuousMode = false;
+  bool _autoRearming = false;
+  int _autoRearmSeconds = 3;
+  Timer? _rearmTimer;
+
   LiveInputs _effectiveInputs({required bool trackDeliveries}) {
     LiveInputs effective = widget.inputs.copyWith(trackDeliveries: trackDeliveries);
     if (effective.cameraToBatterM == null && effective.wicket != null && effective.wicket!.isValid) {
       final double autoFeet = estimateDistanceFeetFromWicket(
         effective.wicket!.vertices,
+        zoom: _controller.zoom,
         family: effective.wicketFamily ?? WicketFamily.traditionalStumps,
       );
       effective = effective.copyWith(cameraToBatterM: feetToMetres(autoFeet));
@@ -86,8 +92,12 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
     );
     _resultSub = _controller.results.listen((LiveDeliveryResult result) {
       if (mounted) {
-        _disarmDelivery();
-        widget.onDelivery(result);
+        if (_continuousMode) {
+          _handleContinuousDelivery(result);
+        } else {
+          _disarmDelivery();
+          widget.onDelivery(result);
+        }
       }
     });
     unawaited(_open());
@@ -101,12 +111,68 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
     }
   }
 
+  void _handleContinuousDelivery(LiveDeliveryResult result) {
+    _countdownTimer?.cancel();
+    _countdownTimer = null;
+    widget.onDelivery(result);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _deliveryArmed = false;
+      _autoRearming = true;
+      _autoRearmSeconds = 3;
+    });
+    _controller.updateInputs(_effectiveInputs(trackDeliveries: false));
+
+    _rearmTimer?.cancel();
+    _rearmTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_autoRearmSeconds > 1) {
+        setState(() {
+          _autoRearmSeconds--;
+        });
+      } else {
+        timer.cancel();
+        _rearmTimer = null;
+        setState(() {
+          _autoRearming = false;
+        });
+        _armDelivery();
+      }
+    });
+  }
+
+  void _toggleContinuousMode(bool enabled) {
+    _rearmTimer?.cancel();
+    _rearmTimer = null;
+    setState(() {
+      _continuousMode = enabled;
+      _autoRearming = false;
+    });
+    final LiveSettings? settings = ref.read(liveSettingsProvider);
+    settings?.setContinuousTracking(enabled);
+    if (enabled) {
+      if (!_deliveryArmed && _controller.isRunning) {
+        _armDelivery();
+      }
+    } else {
+      if (_deliveryArmed) {
+        _disarmDelivery();
+      }
+    }
+  }
+
   void _armDelivery() {
     if (!_controller.isRunning || _deliveryArmed) {
       return;
     }
     setState(() {
       _deliveryArmed = true;
+      _autoRearming = false;
       _armedRemainingSeconds = _deliveryTimeoutSeconds;
     });
     _controller.updateInputs(_effectiveInputs(trackDeliveries: true));
@@ -122,14 +188,20 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
           _armedRemainingSeconds--;
         });
       } else {
-        _disarmDelivery();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Delivery timed out — tap "Start Delivery" when bowler is ready.'),
-            duration: Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        if (_continuousMode) {
+          setState(() {
+            _armedRemainingSeconds = _deliveryTimeoutSeconds;
+          });
+        } else {
+          _disarmDelivery();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Delivery timed out — tap "Start Delivery" when bowler is ready.'),
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
       }
     });
   }
@@ -137,9 +209,12 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
   void _disarmDelivery() {
     _countdownTimer?.cancel();
     _countdownTimer = null;
-    if (_deliveryArmed) {
+    _rearmTimer?.cancel();
+    _rearmTimer = null;
+    if (_deliveryArmed || _autoRearming) {
       setState(() {
         _deliveryArmed = false;
+        _autoRearming = false;
         _armedRemainingSeconds = 0;
       });
       _controller.updateInputs(_effectiveInputs(trackDeliveries: false));
@@ -165,6 +240,7 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _countdownTimer?.cancel();
+    _rearmTimer?.cancel();
     unawaited(_resultSub?.cancel());
     _controller.dispose();
     super.dispose();
@@ -182,9 +258,11 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
       }
       try {
         final int savedTimeout = await settings.deliveryTimeoutSeconds();
+        final bool savedContinuous = await settings.continuousTracking();
         if (mounted) {
           setState(() {
             _deliveryTimeoutSeconds = savedTimeout;
+            _continuousMode = savedContinuous;
           });
         }
       } on Object {
@@ -196,6 +274,9 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
     }
     _controller.setStartZoom(zoom);
     await _controller.start();
+    if (mounted && _continuousMode) {
+      _armDelivery();
+    }
   }
 
   Future<void> _markStumps() async {
@@ -247,7 +328,11 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
             ),
             if (running)
               StatusChip(
-                label: _deliveryArmed ? watchLabel(status.watch) : 'Standby (Tap Start)',
+                label: _autoRearming
+                    ? 'Auto-arming (${_autoRearmSeconds}s)'
+                    : (_deliveryArmed
+                        ? (_continuousMode ? 'Continuous Mode' : watchLabel(status.watch))
+                        : (_continuousMode ? 'Continuous (Paused)' : 'Standby (Tap Start)')),
               ),
             IconButton(
               tooltip: _expanded ? 'Hide the picture' : 'Show the picture',
@@ -390,6 +475,48 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
   }
 
   Widget _deliveryArmingControls(BuildContext context, LiveSessionStatus status) {
+    if (_autoRearming) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: AppColors.creaseAmberTint,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: AppColors.creaseAmber.withValues(alpha: 0.50)),
+        ),
+        child: Row(
+          children: <Widget>[
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                valueColor: AlwaysStoppedAnimation<Color>(AppColors.creaseAmberInk),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            Expanded(
+              child: Text(
+                'BALL SCORED · Auto-arming next ball in ${_autoRearmSeconds}s...',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.creaseAmberInk,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            OutlinedButton(
+              onPressed: () => _toggleContinuousMode(false),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+                minimumSize: const Size(60, 32),
+              ),
+              child: const Text('Pause', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (_deliveryArmed) {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
@@ -413,7 +540,9 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
-                    'RECORDING DELIVERY... Bowl now! (${_armedRemainingSeconds}s)',
+                    _continuousMode
+                        ? 'CONTINUOUS TRACKING... Bowl now! (${_armedRemainingSeconds}s)'
+                        : 'RECORDING DELIVERY... Bowl now! (${_armedRemainingSeconds}s)',
                     style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       color: AppColors.ballRed,
@@ -422,12 +551,21 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
                   ),
                 ),
                 OutlinedButton(
-                  onPressed: _disarmDelivery,
+                  onPressed: () {
+                    if (_continuousMode) {
+                      _toggleContinuousMode(false);
+                    } else {
+                      _disarmDelivery();
+                    }
+                  },
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
                     minimumSize: const Size(60, 32),
                   ),
-                  child: const Text('Cancel', style: TextStyle(fontSize: 12)),
+                  child: Text(
+                    _continuousMode ? 'Pause' : 'Cancel',
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
               ],
             ),
@@ -448,43 +586,66 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
       );
     }
 
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Expanded(
-          child: SizedBox(
-            height: 48,
-            child: FilledButton.icon(
-              icon: const Icon(Icons.sports_cricket, size: 20),
-              label: const Text(
-                'START DELIVERY',
-                style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: SizedBox(
+                height: 48,
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.sports_cricket, size: 20),
+                  label: const Text(
+                    'START DELIVERY',
+                    style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8),
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.pitchGreen,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  onPressed: _controller.isRunning ? _armDelivery : null,
+                ),
               ),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.pitchGreen,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: _controller.isRunning ? _armDelivery : null,
             ),
-          ),
+            const SizedBox(width: AppSpacing.xs),
+            PopupMenuButton<int>(
+              icon: const Icon(Icons.timer_outlined, color: AppColors.pitchGreen),
+              tooltip: 'Delivery timeout (${_deliveryTimeoutSeconds}s)',
+              initialValue: _deliveryTimeoutSeconds,
+              onSelected: (int sec) {
+                setState(() {
+                  _deliveryTimeoutSeconds = sec;
+                });
+                final LiveSettings? settings = ref.read(liveSettingsProvider);
+                settings?.setDeliveryTimeoutSeconds(sec);
+              },
+              itemBuilder: (BuildContext context) => const <PopupMenuEntry<int>>[
+                PopupMenuItem<int>(value: 6, child: Text('6s (Fast Bowler)')),
+                PopupMenuItem<int>(value: 8, child: Text('8s (Standard)')),
+                PopupMenuItem<int>(value: 12, child: Text('12s (Long Run-up / Spin)')),
+                PopupMenuItem<int>(value: 16, child: Text('16s (Casual / Kids)')),
+              ],
+            ),
+          ],
         ),
-        const SizedBox(width: AppSpacing.xs),
-        PopupMenuButton<int>(
-          icon: const Icon(Icons.timer_outlined, color: AppColors.pitchGreen),
-          tooltip: 'Delivery timeout (${_deliveryTimeoutSeconds}s)',
-          initialValue: _deliveryTimeoutSeconds,
-          onSelected: (int sec) {
-            setState(() {
-              _deliveryTimeoutSeconds = sec;
-            });
-            final LiveSettings? settings = ref.read(liveSettingsProvider);
-            settings?.setDeliveryTimeoutSeconds(sec);
-          },
-          itemBuilder: (BuildContext context) => const <PopupMenuEntry<int>>[
-            PopupMenuItem<int>(value: 6, child: Text('6s (Fast Bowler)')),
-            PopupMenuItem<int>(value: 8, child: Text('8s (Standard)')),
-            PopupMenuItem<int>(value: 12, child: Text('12s (Long Run-up / Spin)')),
-            PopupMenuItem<int>(value: 16, child: Text('16s (Casual / Kids)')),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: <Widget>[
+            const Icon(Icons.all_inclusive, size: 16, color: AppColors.pitchGreen),
+            const SizedBox(width: 4),
+            const Text(
+              'Continuous auto-arm mode',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(width: 8),
+            Switch.adaptive(
+              value: _continuousMode,
+              activeColor: AppColors.pitchGreen,
+              onChanged: _controller.isRunning ? _toggleContinuousMode : null,
+            ),
           ],
         ),
       ],
@@ -492,8 +653,13 @@ class _LiveCameraPanelState extends ConsumerState<LiveCameraPanel> with WidgetsB
   }
 
   String _hint(LiveSessionStatus status) {
+    if (_autoRearming) {
+      return 'Turnaround cooldown: waiting for bowler to return to top of run-up.';
+    }
     if (!_deliveryArmed) {
-      return 'Camera is on standby. Tap "START DELIVERY" when the bowler is ready to bowl.';
+      return _continuousMode
+          ? 'Continuous tracking paused. Tap "START DELIVERY" or toggle switch to resume.'
+          : 'Camera is on standby. Tap "START DELIVERY" when the bowler is ready to bowl.';
     }
     switch (status.watch) {
       case LiveWatchState.learning:

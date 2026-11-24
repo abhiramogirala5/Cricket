@@ -13,6 +13,7 @@ final class LiveSettings {
   static const String ballKindKey = 'ball_kind';
 
   static const String deliveryTimeoutKey = 'live_delivery_timeout_sec';
+  static const String continuousTrackingKey = 'live_continuous_tracking';
 
   static const int defaultDeliveryTimeoutSeconds = 8;
   static const int minDeliveryTimeoutSeconds = 5;
@@ -55,6 +56,20 @@ final class LiveSettings {
     final int clamped = seconds.clamp(minDeliveryTimeoutSeconds, maxDeliveryTimeoutSeconds);
     return _store.transaction<void>(
       (LocalWriter writer) => writer.setMeta(deliveryTimeoutKey, clamped.toString()),
+      notify: false,
+    );
+  }
+
+  /// Whether continuous tracking mode is enabled (auto-rearms for every delivery).
+  Future<bool> continuousTracking() async {
+    final String? raw = await _store.meta(continuousTrackingKey);
+    return raw == 'true';
+  }
+
+  Future<void> setContinuousTracking(bool enabled) {
+    return _store.transaction<void>(
+      (LocalWriter writer) =>
+          writer.setMeta(continuousTrackingKey, enabled ? 'true' : 'false'),
       notify: false,
     );
   }

@@ -109,6 +109,7 @@ final class UmpireCameraController extends ChangeNotifier {
     WicketFamily family = WicketFamily.traditionalStumps,
     double? targetDistanceFeet,
     double zoom = 1.0,
+    bool isCentroid = false,
   }) {
     final LiveSessionPort? session = _session;
     if (session == null) {
@@ -119,6 +120,7 @@ final class UmpireCameraController extends ChangeNotifier {
           groundY: searchCenter?.y ?? 0.65,
           targetDistanceFeet: targetDistanceFeet,
           zoom: zoom,
+          isCentroid: isCentroid,
         ),
         confidence: 0.50,
         isOpticallyRefined: false,
@@ -131,6 +133,7 @@ final class UmpireCameraController extends ChangeNotifier {
       family: family,
       targetDistanceFeet: targetDistanceFeet,
       zoom: zoom,
+      isCentroid: isCentroid,
     );
   }
 
@@ -340,6 +343,13 @@ final class UmpireCameraController extends ChangeNotifier {
     }
     if (error is StateError) {
       return error.message;
+    }
+    final String msg = error.toString();
+    if (msg.contains('releaseFlutterSurfaceTexture') || msg.contains('flutterSurfaceProducer')) {
+      return 'The camera preview is restarting. Tap "Try again" to resume.';
+    }
+    if (msg.contains('PlatformException')) {
+      return 'The camera encountered an operating system error. Tap "Try again" to restart.';
     }
     return 'The camera could not be started ($error).';
   }

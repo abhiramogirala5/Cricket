@@ -178,4 +178,44 @@ void main() {
     expect(delivered, isNull);
     expect(find.textContaining('Delivery timed out'), findsOneWidget);
   });
+
+  testWidgets('continuous auto-arm mode automatically re-arms after delivery cooldown', (
+    WidgetTester tester,
+  ) async {
+    final LiveInputs inputs = makeLiveInputs();
+    LiveDeliveryResult? delivered;
+
+    await tester.pumpWidget(
+      buildPanel(
+        inputs: inputs,
+        onDelivery: (LiveDeliveryResult r) => delivered = r,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Toggle continuous auto-arm mode switch
+    await tester.tap(find.byType(Switch));
+    await tester.pump();
+
+    // Verify armed in continuous mode
+    expect(find.textContaining('CONTINUOUS TRACKING'), findsOneWidget);
+    expect(sessions.single.inputs.trackDeliveries, isTrue);
+
+    // Simulate delivery result arriving
+    final LiveDeliveryResult result = makeLiveResult();
+    sessions.single.resultController.add(result);
+    await tester.pump();
+
+    expect(delivered, equals(result));
+    // Verify auto-rearming cooldown state
+    expect(find.textContaining('Auto-arming next ball'), findsOneWidget);
+    expect(sessions.single.inputs.trackDeliveries, isFalse);
+
+    // Fast-forward 3 seconds for turnaround cooldown
+    await tester.pump(const Duration(seconds: 3));
+
+    // Verify automatically re-armed without manual intervention
+    expect(find.textContaining('CONTINUOUS TRACKING'), findsOneWidget);
+    expect(sessions.single.inputs.trackDeliveries, isTrue);
+  });
 }

@@ -70,6 +70,7 @@ class _LiveScoringScreenState extends ConsumerState<LiveScoringScreen> {
 
   /// The replay file that goes with [_analysis] (kept on the phone until the ball is scored).
   String? _replayId;
+  String? _lastRecordedDeliveryId;
 
   /// The ball that is bowled (read in `build`, used by the helpers that build the camera panel).
   ball_kind.BallKind _ball = ball_kind.BallKind.cricketBall;
@@ -278,12 +279,30 @@ class _LiveScoringScreenState extends ConsumerState<LiveScoringScreen> {
         return;
       }
       setState(() {
+        _lastRecordedDeliveryId = saved.id;
         _choices = const LiveChoices();
         _analysis = null;
         _replayId = null;
         _busy = false;
       });
       unawaited(HapticFeedback.lightImpact());
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ball recorded (${ballLabel(saved)})'),
+            duration: const Duration(seconds: 4),
+            behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'REVIEW',
+              textColor: AppColors.pitchGreen,
+              onPressed: () {
+                context.push(Routes.review(widget.matchId, saved.id));
+              },
+            ),
+          ),
+        );
+      }
     } on Object catch (error) {
       if (!mounted) {
         return;
@@ -731,14 +750,37 @@ class _LiveScoringScreenState extends ConsumerState<LiveScoringScreen> {
       }
     }
 
+    final Delivery? lastActive = board.lastActiveBall;
     children
       ..add(const SizedBox(height: AppSpacing.lg))
       ..add(
         OverStrip(
           labels: board.overLabels,
           showingCompletedOver: progress.isShowingCompletedOver,
+          onBallTap: (int index) {
+            final List<Delivery> overDeliveries = progress.overDeliveries;
+            if (index >= 0 && index < overDeliveries.length) {
+              context.push(Routes.review(bundle.match.id, overDeliveries[index].id));
+            }
+          },
         ),
       );
+
+    if (lastActive != null) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.only(top: AppSpacing.xs),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.analytics_outlined, size: 18),
+              label: Text('Review last ball (${ballLabel(lastActive)})'),
+              onPressed: () => context.push(Routes.review(bundle.match.id, lastActive.id)),
+            ),
+          ),
+        ),
+      );
+    }
 
     if (!ended) {
       final Widget? assistant = _assistantSection(bundle, readiness, engine);

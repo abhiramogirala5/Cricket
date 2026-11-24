@@ -1,3 +1,4 @@
+import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -218,7 +219,8 @@ final class LiveTracker {
   final FrameClock _clock;
 
   FrameRing? _ring;
-  final List<int> _frameTimes = <int>[];
+  final ListQueue<int> _frameTimes = ListQueue<int>();
+  final Map<int, (int, bool)> _deliveryCache = <int, (int, bool)>{};
   LiveWatchState _state = LiveWatchState.learning;
   int _startedMs = 0;
   int _cooldownUntilMs = 0;
@@ -243,6 +245,7 @@ final class LiveTracker {
     } else {
       _armedAtMs = 0;
       _tracker.clearPaths();
+      _deliveryCache.clear();
       if (_state == LiveWatchState.tracking) {
         _state = LiveWatchState.watching;
       }
@@ -258,6 +261,7 @@ final class LiveTracker {
     _clock.reset();
     _ring?.clear();
     _frameTimes.clear();
+    _deliveryCache.clear();
     _state = LiveWatchState.learning;
     _framesSinceDelivery = 0;
     _needsArmClear = false;
@@ -305,7 +309,7 @@ final class LiveTracker {
     _framesSinceDelivery += 1;
     _frameTimes.add(time);
     while (_frameTimes.isNotEmpty && time - _frameTimes.first > 8000) {
-      _frameTimes.removeAt(0);
+      _frameTimes.removeFirst();
     }
 
     int gap = (2.2 * _clock.periodMs).round();
@@ -478,13 +482,30 @@ final class LiveTracker {
     return path;
   }
 
+  bool _looksLikeDeliveryCached(BallHypothesis h) {
+    final (int, bool)? cached = _deliveryCache[h.id];
+    if (cached != null && cached.$1 == h.records.length) {
+      return cached.$2;
+    }
+    final bool result = _looksLikeDelivery(h.records);
+    _deliveryCache[h.id] = (h.records.length, result);
+    return result;
+  }
+
   /// The latest time at which any path that flies like a delivery still moved.
   int _lastActivityMs() {
     int latest = _startedMs;
-    for (final BallHypothesis h in <BallHypothesis>[..._tracker.active, ..._tracker.finished]) {
+    for (final BallHypothesis h in _tracker.active) {
       if (h.lastTimestampMs > latest &&
           h.records.length >= config.minPoints &&
-          _looksLikeDelivery(h.records)) {
+          _looksLikeDeliveryCached(h)) {
+        latest = h.lastTimestampMs;
+      }
+    }
+    for (final BallHypothesis h in _tracker.finished) {
+      if (h.lastTimestampMs > latest &&
+          h.records.length >= config.minPoints &&
+          _looksLikeDeliveryCached(h)) {
         latest = h.lastTimestampMs;
       }
     }
@@ -519,6 +540,7 @@ final class LiveTracker {
       );
     }
     _tracker.clearPaths();
+    _deliveryCache.clear();
     _framesSinceDelivery = 0;
     if (capture != null && capture.isUsable) {
       _state = LiveWatchState.cooldown;

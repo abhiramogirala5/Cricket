@@ -18,10 +18,18 @@ import 'package:gully_umpire/app/theme/app_spacing.dart';
 
 /// The balls of the over in progress, as round chips.
 class OverStrip extends StatelessWidget {
-  const OverStrip({super.key, required this.labels, required this.showingCompletedOver});
+  const OverStrip({
+    super.key,
+    required this.labels,
+    required this.showingCompletedOver,
+    this.onBallTap,
+  });
 
   final List<String> labels;
   final bool showingCompletedOver;
+
+  /// Optional callback invoked when the user taps a ball chip with its 0-based index in the over.
+  final ValueChanged<int>? onBallTap;
 
   @override
   Widget build(BuildContext context) {
@@ -29,9 +37,19 @@ class OverStrip extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(
-          showingCompletedOver ? 'Last over' : 'This over',
-          style: text.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: <Widget>[
+            Text(
+              showingCompletedOver ? 'Last over' : 'This over',
+              style: text.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            if (labels.isNotEmpty && onBallTap != null)
+              Text(
+                'Tap ball to review',
+                style: text.labelSmall?.copyWith(color: AppColors.inkMuted),
+              ),
+          ],
         ),
         const SizedBox(height: AppSpacing.sm),
         if (labels.isEmpty)
@@ -44,7 +62,12 @@ class OverStrip extends StatelessWidget {
             spacing: AppSpacing.sm,
             runSpacing: AppSpacing.sm,
             children: <Widget>[
-              for (final String label in labels) _BallChip(label: label),
+              for (int i = 0; i < labels.length; i++)
+                _BallChip(
+                  label: labels[i],
+                  index: i,
+                  onTap: onBallTap != null ? () => onBallTap!(i) : null,
+                ),
             ],
           ),
       ],
@@ -53,29 +76,47 @@ class OverStrip extends StatelessWidget {
 }
 
 class _BallChip extends StatelessWidget {
-  const _BallChip({required this.label});
+  const _BallChip({
+    required this.label,
+    this.index,
+    this.onTap,
+  });
 
   final String label;
+  final int? index;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = ballChipColors(label);
-    return Container(
-      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: colors.background,
+    final Widget chip = Material(
+      color: colors.background,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: colors.foreground,
-          fontWeight: FontWeight.w800,
-          fontSize: 15,
+        child: Container(
+          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              color: colors.foreground,
+              fontWeight: FontWeight.w800,
+              fontSize: 15,
+            ),
+          ),
         ),
       ),
     );
+
+    if (onTap != null) {
+      return Tooltip(
+        message: 'Review ball ${index != null ? index! + 1 : ""}',
+        child: chip,
+      );
+    }
+    return chip;
   }
 }

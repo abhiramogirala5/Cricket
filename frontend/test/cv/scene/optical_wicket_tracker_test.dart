@@ -71,6 +71,82 @@ void main() {
       expect(midX, closeTo(0.50, 0.05));
     });
 
+    test('detectOrRefineWicket accurately detects a chair with wide legs and backrest', () {
+      const int w = 200;
+      const int h = 200;
+      final Uint8List pixels = Uint8List(w * h);
+
+      // Draw chair: 2 vertical leg/backrest bars at x=80 and x=120, y=50 to y=140
+      // plus horizontal seat bar at y=95 between x=80 and x=120
+      for (int y = 50; y <= 140; y++) {
+        for (final int legX in <int>[80, 120]) {
+          for (int dx = -2; dx <= 2; dx++) {
+            pixels[y * w + legX + dx] = 230;
+          }
+        }
+      }
+      for (int x = 80; x <= 120; x++) {
+        for (int dy = -2; dy <= 2; dy++) {
+          pixels[(95 + dy) * w + x] = 210;
+        }
+      }
+
+      final LumaFrame frame = LumaFrame(
+        width: w,
+        height: h,
+        timestampMs: 100,
+        pixels: pixels,
+      );
+
+      final OpticalWicketResult result = tracker.detectOrRefineWicket(
+        frame: frame,
+        searchCenter: const Point2D(0.50, 0.50),
+        family: WicketFamily.chair,
+        isCentroid: true,
+      );
+
+      expect(result.corners, hasLength(4));
+      expect(result.isOpticallyRefined, isTrue);
+      expect(result.confidence, greaterThan(0.85));
+      expect(result.family, WicketFamily.chair);
+
+      final double midX = (result.corners[0].x + result.corners[1].x) / 2;
+      expect(midX, closeTo(0.50, 0.05));
+    });
+
+    test('detectOrRefineWicket corridor search finds off-center stumps when searchCenter is null', () {
+      const int w = 200;
+      const int h = 200;
+      final Uint8List pixels = Uint8List(w * h);
+
+      // Draw stumps shifted to x=112 (midX ~ 0.56), y=110 to y=150 (midY ~ 0.65)
+      for (int y = 110; y <= 150; y++) {
+        for (final int stumpX in <int>[108, 112, 116]) {
+          for (int dx = -1; dx <= 1; dx++) {
+            pixels[y * w + stumpX + dx] = 225;
+          }
+        }
+      }
+
+      final LumaFrame frame = LumaFrame(
+        width: w,
+        height: h,
+        timestampMs: 100,
+        pixels: pixels,
+      );
+
+      final OpticalWicketResult result = tracker.detectOrRefineWicket(
+        frame: frame,
+        searchCenter: null, // Triggers automatic pitch corridor multi-scan
+        family: WicketFamily.traditionalStumps,
+      );
+
+      expect(result.corners, hasLength(4));
+      expect(result.isOpticallyRefined, isTrue);
+      final double midX = (result.corners[0].x + result.corners[1].x) / 2;
+      expect(midX, closeTo(0.56, 0.06));
+    });
+
     test('spatial anchor tracking detects camera ego-motion and shifts corners', () {
       const int w = 160;
       const int h = 120;
@@ -133,6 +209,118 @@ void main() {
       // Test unlocking
       tracker.unlockAnchor();
       expect(tracker.isAnchorLocked, isFalse);
+    });
+
+    test('spatial anchor auto-recovers after temporary occlusion or rapid shake', () {
+      const int w = 160;
+      const int h = 120;
+      final Uint8List frame1Pixels = Uint8List(w * h);
+
+      for (int y = 40; y <= 80; y++) {
+        for (int x = 70; x <= 90; x++) {
+          frame1Pixels[y * w + x] = ((x * 13 + y * 7) % 200) + 30;
+        }
+      }
+
+      final LumaFrame frame1 = LumaFrame(
+        width: w,
+        height: h,
+        timestampMs: 100,
+        pixels: frame1Pixels,
+      );
+
+      final List<Point2D> initialCorners = <Point2D>[
+        const Point2D(0.44, 0.35),
+        const Point2D(0.56, 0.35),
+        const Point2D(0.56, 0.65),
+        const Point2D(0.44, 0.65),
+      ];
+
+      tracker.lockAnchor(initialCorners, frame1);
+
+      // Frame 2: Occluded frame (blank / hand in front of camera)
+      final LumaFrame occluded = LumaFrame(
+        width: w,
+        height: h,
+        timestampMs: 133,
+        pixels: Uint8List(w * h),
+      );
+
+      final AnchorTrackingResult lost = tracker.updateAnchor(occluded);
+      expect(lost.hasMoved, isFalse);
+      expect(lost.confidence, lessThanOrEqualTo(0.30));
+
+      // Frame 3: Target reappears shifted by +8px horizontally (camera panned left)
+      const int shiftX = 8;
+      final Uint8List frame3Pixels = Uint8List(w * h);
+      for (int y = 40; y <= 80; y++) {
+        for (int x = 70; x <= 90; x++) {
+          final int newX = x + shiftX;
+          if (newX >= 0 && newX < w) {
+            frame3Pixels[y * w + newX] = frame1Pixels[y * w + x];
+          }
+        }
+      }
+
+      final LumaFrame frame3 = LumaFrame(
+        width: w,
+        height: h,
+        timestampMs: 166,
+        pixels: frame3Pixels,
+      );
+
+      // Should automatically recover the displacement!
+      final AnchorTrackingResult recovered = tracker.updateAnchor(frame3);
+      expect(recovered.hasMoved, isTrue);
+      expect(recovered.confidence, greaterThanOrEqualTo(0.50));
+      final double recoveredMidX = (recovered.corners[0].x + recovered.corners[1].x) / 2;
+      expect(recoveredMidX, closeTo(0.50 + (shiftX / w), 0.02));
+    });
+
+    test('template adapts to gradual lighting changes while remaining locked', () {
+      const int w = 160;
+      const int h = 120;
+      final Uint8List framePixels = Uint8List(w * h);
+
+      for (int y = 40; y <= 80; y++) {
+        for (int x = 70; x <= 90; x++) {
+          framePixels[y * w + x] = ((x * 11 + y * 5) % 180) + 40;
+        }
+      }
+
+      final LumaFrame frame1 = LumaFrame(
+        width: w,
+        height: h,
+        timestampMs: 100,
+        pixels: framePixels,
+      );
+
+      final List<Point2D> initialCorners = <Point2D>[
+        const Point2D(0.44, 0.35),
+        const Point2D(0.56, 0.35),
+        const Point2D(0.56, 0.65),
+        const Point2D(0.44, 0.65),
+      ];
+
+      tracker.lockAnchor(initialCorners, frame1);
+
+      // Simulate 8 frames with gradual brightening (+10 gray levels)
+      for (int i = 1; i <= 8; i++) {
+        final Uint8List brightened = Uint8List(w * h);
+        for (int idx = 0; idx < w * h; idx++) {
+          brightened[idx] = (framePixels[idx] + i).clamp(0, 255);
+        }
+        final LumaFrame frame = LumaFrame(
+          width: w,
+          height: h,
+          timestampMs: 100 + i * 33,
+          pixels: brightened,
+        );
+        final AnchorTrackingResult res = tracker.updateAnchor(frame);
+        expect(res.confidence, greaterThan(0.60));
+      }
+
+      expect(tracker.isAnchorLocked, isTrue);
     });
   });
 }
